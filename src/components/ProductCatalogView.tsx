@@ -1,0 +1,710 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { Search, Filter, Sparkles, ArrowRight, Star, SlidersHorizontal, Heart } from 'lucide-react';
+import { PRODUCTS, CATEGORIES_DATA } from '../data/mockData';
+import { Product, ProductCategory, PrintMethod } from '../types';
+import { ProductMockupCanvas } from './ProductMockupCanvas';
+
+interface ProductCatalogViewProps {
+  initialCategory?: ProductCategory;
+  searchQuery?: string;
+  onSelectProduct: (product: Product) => void;
+  onCustomizeProduct: (productId: string) => void;
+  onOpenQuoteCalculator?: () => void;
+  onOpenDownloadCatalog?: () => void;
+  wishlistIds?: string[];
+  onToggleWishlist?: (productId: string) => void;
+}
+
+export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
+  initialCategory = 'all',
+  searchQuery = '',
+  onSelectProduct,
+  onCustomizeProduct,
+  onOpenQuoteCalculator,
+  onOpenDownloadCatalog,
+  wishlistIds = [],
+  onToggleWishlist,
+}) => {
+  const [selectedCategory, setSelectedCategory] = useState<ProductCategory>(initialCategory);
+  const [searchTerm, setSearchTerm] = useState(searchQuery);
+  const [selectedPrintMethod, setSelectedPrintMethod] = useState<string>('all');
+  const [selectedPriceRange, setSelectedPriceRange] = useState<'all' | 'under-200' | '200-500' | '500-1000' | '1000-plus'>('all');
+  const [selectedMoqRange, setSelectedMoqRange] = useState<'all' | '1-2' | '3-10' | '11-50' | '50-plus'>('all');
+  const [selectedDispatch, setSelectedDispatch] = useState<'all' | 'fast-24' | 'standard'>('all');
+  const [onlyWishlisted, setOnlyWishlisted] = useState(false);
+  const [sortBy, setSortBy] = useState<'featured' | 'price-low' | 'price-high' | 'rating' | 'moq'>('featured');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [cardViews, setCardViews] = useState<Record<string, 'front' | 'back'>>({});
+
+  // Sync state if category or search query props change dynamically
+  useEffect(() => {
+    setSelectedCategory(initialCategory);
+  }, [initialCategory]);
+
+  useEffect(() => {
+    setSearchTerm(searchQuery);
+  }, [searchQuery]);
+
+  // Filter products
+  const filteredProducts = useMemo(() => {
+    return PRODUCTS.filter((p) => {
+      // Category match
+      if (selectedCategory !== 'all') {
+        if (selectedCategory === 'caps' || selectedCategory === 'custom-caps') {
+          if (p.productType !== 'cap' && !p.name.toLowerCase().includes('cap')) return false;
+        } else if (selectedCategory === 'apparel' || selectedCategory === 'custom-tshirt-printing') {
+          if (p.category !== 'apparel') return false;
+          if (selectedCategory === 'custom-tshirt-printing' && p.productType === 'cap') return false;
+        } else if (selectedCategory === 'corporate-gifting' || selectedCategory === 'kits' || selectedCategory === 'drinkware') {
+          if (p.category !== 'kits' && p.category !== 'drinkware') return false;
+        } else if (selectedCategory === 'signage' || selectedCategory === 'promotional-items') {
+          if (p.category !== 'signage') return false;
+        } else if (selectedCategory === 'stationery' || selectedCategory === 'printing-items') {
+          if (p.category !== 'stationery') return false;
+        } else if (p.category !== selectedCategory) {
+          return false;
+        }
+      }
+
+      // Print method match
+      if (selectedPrintMethod !== 'all' && !p.printMethods.includes(selectedPrintMethod as PrintMethod)) return false;
+
+      // Price range match
+      if (selectedPriceRange === 'under-200' && p.basePrice >= 200) return false;
+      if (selectedPriceRange === '200-500' && (p.basePrice < 200 || p.basePrice > 500)) return false;
+      if (selectedPriceRange === '500-1000' && (p.basePrice < 500 || p.basePrice > 1000)) return false;
+      if (selectedPriceRange === '1000-plus' && p.basePrice <= 1000) return false;
+
+      // MOQ range match
+      if (selectedMoqRange === '1-2' && p.moq > 2) return false;
+      if (selectedMoqRange === '3-10' && (p.moq < 3 || p.moq > 10)) return false;
+      if (selectedMoqRange === '11-50' && (p.moq < 11 || p.moq > 50)) return false;
+      if (selectedMoqRange === '50-plus' && p.moq < 50) return false;
+
+      // Dispatch turnaround match
+      if (selectedDispatch === 'fast-24' && !p.dispatchTime.includes('24')) return false;
+      if (selectedDispatch === 'standard' && p.dispatchTime.includes('24')) return false;
+
+      // Saved / Wishlist filter
+      if (onlyWishlisted && !wishlistIds.includes(p.id)) return false;
+
+      // Search term
+      if (searchTerm.trim() !== '') {
+        const query = searchTerm.toLowerCase();
+        const matchesName = p.name.toLowerCase().includes(query);
+        const matchesDesc = p.description.toLowerCase().includes(query);
+        const matchesCategory = p.category.toLowerCase().includes(query);
+        const matchesPrint = p.printMethods.some(pm => pm.toLowerCase().includes(query));
+        if (!matchesName && !matchesDesc && !matchesCategory && !matchesPrint) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      if (sortBy === 'price-low') return a.basePrice - b.basePrice;
+      if (sortBy === 'price-high') return b.basePrice - a.basePrice;
+      if (sortBy === 'rating') return b.rating - a.rating;
+      if (sortBy === 'moq') return a.moq - b.moq;
+      return 0; // featured default
+    });
+  }, [selectedCategory, selectedPrintMethod, selectedPriceRange, selectedMoqRange, selectedDispatch, onlyWishlisted, wishlistIds, searchTerm, sortBy]);
+
+  const savedCatalogCount = PRODUCTS.filter(p => wishlistIds.includes(p.id)).length;
+
+  const activeFiltersCount = (selectedCategory !== 'all' ? 1 : 0) +
+    (selectedPrintMethod !== 'all' ? 1 : 0) +
+    (selectedPriceRange !== 'all' ? 1 : 0) +
+    (selectedMoqRange !== 'all' ? 1 : 0) +
+    (selectedDispatch !== 'all' ? 1 : 0) +
+    (onlyWishlisted ? 1 : 0) +
+    (searchTerm.trim() !== '' ? 1 : 0);
+
+  const resetAllFilters = () => {
+    setSelectedCategory('all');
+    setSelectedPrintMethod('all');
+    setSelectedPriceRange('all');
+    setSelectedMoqRange('all');
+    setSelectedDispatch('all');
+    setOnlyWishlisted(false);
+    setSearchTerm('');
+  };
+
+  const categories = [
+    { id: 'all', label: 'All Catalog' },
+    { id: 'corporate-gifting', label: 'Corporate Gifting' },
+    { id: 'promotional-items', label: 'Promotional Items' },
+    { id: 'custom-tshirt-printing', label: 'Custom T-Shirts' },
+    { id: 'printing-items', label: 'Printing Items' },
+    { id: 'caps', label: 'Custom Caps' },
+  ];
+
+  const printMethodsList = [
+    'all',
+    'Precision Embroidery',
+    'DTF Printing',
+    'Laser Engraving',
+    'High-Precision UV',
+    'Screen Printing'
+  ];
+
+  return (
+    <div className="bg-[#F5F5F7] min-h-screen py-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+        
+        {/* Breadcrumb & Header */}
+        <div>
+          <div className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">
+            TeqqnoWorld / Master Catalog
+          </div>
+          <h1 className="font-display text-3xl sm:text-4xl font-bold text-[#0B0B0D]">
+            Corporate Merchandise & Custom Printing
+          </h1>
+          <p className="text-zinc-600 text-sm mt-1 max-w-2xl">
+            Factory-direct custom merchandise with live volume tier discounts. Filter by print technique, MOQ, or corporate gifting category.
+          </p>
+        </div>
+
+        {/* Filter & Search Bar */}
+        <div className="bg-white rounded-2xl border border-[#E5E5EA] p-4 sm:p-6 shadow-xs space-y-4">
+          
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search products (e.g. polo, bottle, hoodie, embroidery)..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-14 py-2.5 text-sm sm:text-sm border border-zinc-200 rounded-xl focus:border-[#FF7A00] focus:ring-1 focus:ring-[#FF7A00] outline-none min-h-[44px]"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-zinc-600 px-2 py-1 min-h-[36px] flex items-center"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Print Technique Filter, Saved Toggle & Sort dropdowns */}
+            <div className="grid grid-cols-2 sm:flex sm:items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOnlyWishlisted(!onlyWishlisted)}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-xl border transition-colors cursor-pointer min-h-[44px] whitespace-nowrap ${
+                  onlyWishlisted
+                    ? 'border-rose-300 bg-rose-50 text-rose-600 font-semibold'
+                    : 'border-zinc-200 text-zinc-700 bg-white hover:bg-zinc-50'
+                }`}
+              >
+                <Heart className={`w-3.5 h-3.5 ${onlyWishlisted || savedCatalogCount > 0 ? 'fill-rose-500 text-rose-500' : ''}`} />
+                <span className="tabular-nums">Saved ({savedCatalogCount})</span>
+              </button>
+
+              <button
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-xl border transition-colors cursor-pointer min-h-[44px] ${
+                  showAdvancedFilters || activeFiltersCount > 0
+                    ? 'border-[#FF7A00] bg-orange-50/50 text-[#FF7A00] font-semibold'
+                    : 'border-zinc-200 text-zinc-700 bg-white hover:bg-zinc-50'
+                }`}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                <span>Filters {activeFiltersCount > 0 ? `(${activeFiltersCount})` : ''}</span>
+              </button>
+
+              <div className="flex items-center gap-1.5 text-xs text-zinc-600 w-full sm:w-auto">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-[#FF7A00] shrink-0 hidden sm:inline" />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="w-full sm:w-auto border border-zinc-200 rounded-xl px-2.5 py-2 text-xs text-zinc-800 bg-white focus:border-[#FF7A00] outline-none min-h-[44px]"
+                >
+                  <option value="featured">Sort: Featured</option>
+                  <option value="price-low">Price: Low-High</option>
+                  <option value="price-high">Price: High-Low</option>
+                  <option value="rating">Top Rated</option>
+                  <option value="moq">Lowest MOQ</option>
+                </select>
+              </div>
+
+              <select
+                value={selectedPrintMethod}
+                onChange={(e) => setSelectedPrintMethod(e.target.value)}
+                className="w-full sm:w-auto border border-zinc-200 rounded-xl px-2.5 py-2 text-xs text-zinc-800 bg-white focus:border-[#FF7A00] outline-none min-h-[44px]"
+              >
+                <option value="all">All Print Methods</option>
+                <option value="Precision Embroidery">Embroidery</option>
+                <option value="DTF Printing">DTF Printing</option>
+                <option value="Laser Engraving">Laser Engraving</option>
+                <option value="High-Precision UV">UV Print</option>
+                <option value="Screen Printing">Screen Printing</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Expanded Multi-Facet Filter Drawers */}
+          {showAdvancedFilters && (
+            <div className="pt-3 border-t border-zinc-100 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-zinc-50/80 p-3.5 rounded-xl text-xs">
+              
+              {/* Filter 1: Price Range */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-zinc-600 mb-1.5">
+                  Price Per Unit
+                </label>
+                <select
+                  value={selectedPriceRange}
+                  onChange={(e) => setSelectedPriceRange(e.target.value as any)}
+                  className="w-full border border-zinc-300 rounded-lg p-2 text-xs bg-white outline-none focus:border-[#FF7A00]"
+                >
+                  <option value="all">Any Price</option>
+                  <option value="under-200">Under ₹200 (Badges, Caps, Accessories)</option>
+                  <option value="200-500">₹200 – ₹500 (Polo, Mugs, Visiting Cards)</option>
+                  <option value="500-1000">₹500 – ₹1,000 (Hoodies, Display Tables)</option>
+                  <option value="1000-plus">₹1,000+ (Canopies, Standees, Umbrellas)</option>
+                </select>
+              </div>
+
+              {/* Filter 2: MOQ Bracket */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-zinc-600 mb-1.5">
+                  Minimum Order Qty (MOQ)
+                </label>
+                <select
+                  value={selectedMoqRange}
+                  onChange={(e) => setSelectedMoqRange(e.target.value as any)}
+                  className="w-full border border-zinc-300 rounded-lg p-2 text-xs bg-white outline-none focus:border-[#FF7A00]"
+                >
+                  <option value="all">All MOQs</option>
+                  <option value="1-2">Ultra-Low MOQ (1–2 pcs)</option>
+                  <option value="3-10">Small Team Batches (3–10 pcs)</option>
+                  <option value="11-50">Department Orders (11–50 pcs)</option>
+                  <option value="50-plus">Corporate Bulk (50+ pcs)</option>
+                </select>
+              </div>
+
+              {/* Filter 3: Dispatch SLA */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-zinc-600 mb-1.5">
+                  Production SLA Turnaround
+                </label>
+                <select
+                  value={selectedDispatch}
+                  onChange={(e) => setSelectedDispatch(e.target.value as any)}
+                  className="w-full border border-zinc-300 rounded-lg p-2 text-xs bg-white outline-none focus:border-[#FF7A00]"
+                >
+                  <option value="all">All Dispatch Speeds</option>
+                  <option value="fast-24">Express 24–48h Dispatch</option>
+                  <option value="standard">Standard 3–5 Days</option>
+                </select>
+              </div>
+
+            </div>
+          )}
+
+          {/* Active Filter Pills Bar */}
+          {activeFiltersCount > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 text-xs">
+              <span className="text-[11px] text-zinc-500 font-semibold">Active:</span>
+              {selectedCategory !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-orange-100 text-[#FF7A00] font-semibold text-[11px]">
+                  Category: {categories.find(c => c.id === selectedCategory)?.label}
+                  <button onClick={() => setSelectedCategory('all')} className="hover:text-black">×</button>
+                </span>
+              )}
+              {selectedPrintMethod !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
+                  Print: {selectedPrintMethod}
+                  <button onClick={() => setSelectedPrintMethod('all')} className="hover:text-black">×</button>
+                </span>
+              )}
+              {selectedPriceRange !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
+                  Price: {selectedPriceRange}
+                  <button onClick={() => setSelectedPriceRange('all')} className="hover:text-black">×</button>
+                </span>
+              )}
+              {selectedMoqRange !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
+                  MOQ: {selectedMoqRange}
+                  <button onClick={() => setSelectedMoqRange('all')} className="hover:text-black">×</button>
+                </span>
+              )}
+              {onlyWishlisted && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold text-[11px]">
+                  Wishlist Only
+                  <button onClick={() => setOnlyWishlisted(false)} className="hover:text-black">×</button>
+                </span>
+              )}
+              {searchTerm && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
+                  Query: "{searchTerm}"
+                  <button onClick={() => setSearchTerm('')} className="hover:text-black">×</button>
+                </span>
+              )}
+              <button
+                onClick={resetAllFilters}
+                className="text-[11px] text-[#FF7A00] hover:underline font-semibold ml-2 cursor-pointer"
+              >
+                Clear all filters
+              </button>
+            </div>
+          )}
+
+          {/* Category Tabs with no-scrollbar for smooth horizontal swipe */}
+          <div className="flex items-center justify-between gap-3 border-t border-zinc-100 pt-3">
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar touch-pan-x pb-1">
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedCategory(c.id as ProductCategory)}
+                  className={`text-xs px-3.5 py-2 rounded-xl whitespace-nowrap transition-colors font-medium shrink-0 min-h-[40px] flex items-center cursor-pointer ${
+                    selectedCategory === c.id
+                      ? 'bg-[#0B0B0D] text-white shadow-xs font-semibold'
+                      : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Quick B2B Action Buttons */}
+            <div className="hidden lg:flex items-center gap-2 shrink-0">
+              {onOpenQuoteCalculator && (
+                <button
+                  onClick={onOpenQuoteCalculator}
+                  className="bg-orange-50 hover:bg-orange-100 text-[#FF7A00] border border-orange-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>B2B Calculator</span>
+                </button>
+              )}
+              {onOpenDownloadCatalog && (
+                <button
+                  onClick={onOpenDownloadCatalog}
+                  className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Filter className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Catalogues PDF</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {/* Results Counter */}
+        <div className="flex items-center justify-between text-xs text-zinc-500 font-mono">
+          <span>Displaying {filteredProducts.length} verified products {activeFiltersCount > 0 ? '(Filtered)' : ''}</span>
+          <span>Pan-India 24–48h Dispatch Eligible</span>
+        </div>
+
+        {/* Product Cards Grid */}
+        {filteredProducts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-[#E5E5EA] p-12 text-center space-y-3">
+            <div className="text-zinc-400 font-display text-lg font-bold">No products matched your search</div>
+            <p className="text-xs text-zinc-500">Try adjusting your keyword filter or browse all categories.</p>
+            <button
+              onClick={resetAllFilters}
+              className="bg-[#0B0B0D] text-white text-xs px-4 py-2 rounded-lg cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+            {filteredProducts.map((product) => {
+              const lowestTier = product.tieredPricing[product.tieredPricing.length - 1];
+              const isWishlisted = wishlistIds.includes(product.id);
+              const sampleLogoArtwork = {
+                type: 'preset' as const,
+                presetId: 'your-logo',
+                text: 'YOUR LOGO HERE',
+                x: 0,
+                y: 0,
+                scale: 0.9,
+                rotation: 0,
+              };
+
+              return (
+                <div
+                  key={product.id}
+                  className="group bg-white rounded-2xl border border-[#E5E5EA] overflow-hidden hover:border-[#FF7A00]/60 hover:shadow-xl transition-all duration-200 flex flex-col justify-between"
+                >
+                  {/* Canvas Container */}
+                  <div
+                    onClick={() => onSelectProduct(product)}
+                    className="relative bg-[#F8F8FA] p-4 cursor-pointer overflow-hidden flex items-center justify-center border-b border-[#E5E5EA]"
+                  >
+                    <div className="absolute top-3 left-3 z-10 flex flex-col gap-1 items-start">
+                      {product.id === 'prod-rollup-standee' ? (
+                        <>
+                          <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                            Black ONLY
+                          </span>
+                          <span className="bg-zinc-800 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                            3 ft × 6 ft
+                          </span>
+                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                            MOQ: 1 pc
+                          </span>
+                        </>
+                      ) : product.id === 'prod-visiting-card-300gsm' ? (
+                        <>
+                          <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                            White ONLY
+                          </span>
+                          <span className="bg-zinc-800 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                            300 GSM Art Paper
+                          </span>
+                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                            MOQ: 100 pcs
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          {product.badge && (
+                            <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                              {product.badge}
+                            </span>
+                          )}
+                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                            MOQ: {product.moq} pcs
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {onToggleWishlist && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleWishlist(product.id);
+                        }}
+                        aria-label={isWishlisted ? `Remove ${product.name} from wishlist` : `Save ${product.name} to wishlist`}
+                        title={isWishlisted ? 'Saved in Wishlist' : 'Save to Wishlist'}
+                        className={`absolute top-3 right-3 z-20 w-8 h-8 rounded-full flex items-center justify-center border shadow-xs transition-all duration-200 cursor-pointer hover:scale-110 active:scale-95 ${
+                          isWishlisted
+                            ? 'bg-rose-50 border-rose-200 text-rose-500'
+                            : 'bg-white/95 backdrop-blur-xs border-zinc-200/90 text-zinc-600 hover:text-rose-500 hover:border-rose-200'
+                        }`}
+                      >
+                        <Heart className={`w-4 h-4 transition-transform ${isWishlisted ? 'fill-rose-500 text-rose-500' : ''}`} />
+                      </button>
+                    )}
+
+                    <div className="absolute bottom-2.5 left-3 z-10 text-[10px] font-mono text-zinc-600 bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded border border-zinc-200">
+                      ⚡ {product.dispatchTime}
+                    </div>
+
+                    <div className="w-full h-56 group-hover:scale-105 transition-transform duration-300 flex items-center justify-center">
+                      {product.id === 'prod-promo-table' ? (
+                        <img
+                          src="/assets/promo-table/promo-table-banner.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : product.id === 'prod-branding-umbrella' ? (
+                        <img
+                          src="/assets/aistudio/Custom_Printed_Branding_Umbrella_Banner_ddb8aff0.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : product.id === 'prod-rollup-standee' ? (
+                        <img
+                          src="/assets/aistudio/Premium_Rollup_Standee_Infographic_4941e995.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full aspect-[16/9] object-contain bg-white"
+                        />
+                      ) : product.id === 'prod-visiting-card-300gsm' ? (
+                        <img
+                          src="/assets/aistudio/Premium_300_GSM_Business_Cards__1__cc07b248.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full object-contain bg-white"
+                        />
+                      ) : product.id === 'prod-canopy-kiosk' ? (
+                        <img
+                          src="/assets/aistudio/Promotional_Canopy_Kiosk_Feature_Graphic_58ea1c0d.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full object-contain bg-white"
+                        />
+                      ) : product.id === 'prod-ceramic-mug' ? (
+                        <img
+                          src="/assets/aistudio/ceramic_mug_banner_1672x941_dc952a76.webp"
+                          alt={product.name}
+                          width={400}
+                          height={225}
+                          loading="lazy"
+                          decoding="async"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <>
+                          <ProductMockupCanvas
+                            productType={product.productType}
+                            color={product.colors[0]}
+                            artwork={sampleLogoArtwork}
+                            printMethod={product.printMethods[0]}
+                            printPlacement={
+                              (cardViews[product.id] || 'front') === 'back'
+                                ? 'Upper Back Center'
+                                : product.productType === 'polo'
+                                ? 'Left Chest'
+                                : 'Center Chest'
+                            }
+                            view={cardViews[product.id] || 'front'}
+                            className="w-full h-full"
+                          />
+                          {(product.productType === 'polo' || product.productType === 'tshirt' || product.productType === 'hoodie') && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute bottom-2.5 right-2.5 z-20 inline-flex items-center bg-white/95 backdrop-blur-xs border border-zinc-200 rounded-lg p-0.5 shadow-sm"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'front' }))}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                                  (cardViews[product.id] || 'front') === 'front'
+                                    ? 'bg-[#0B0B0D] text-white'
+                                    : 'text-zinc-600 hover:text-zinc-900'
+                                }`}
+                              >
+                                Front
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'back' }))}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                                  cardViews[product.id] === 'back'
+                                    ? 'bg-[#FF7A00] text-white'
+                                    : 'text-zinc-600 hover:text-zinc-900'
+                                }`}
+                              >
+                                Back
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card Content */}
+                  <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
+                        <span className="uppercase font-mono text-[10px] tracking-wide text-zinc-400">
+                          {product.category}
+                        </span>
+                        <div className="flex items-center gap-1 text-amber-500">
+                          <Star className="w-3.5 h-3.5 fill-current" />
+                          <span className="font-semibold text-zinc-700 text-[11px]">{product.rating}</span>
+                          <span className="text-zinc-400 text-[10px]">({product.reviewCount})</span>
+                        </div>
+                      </div>
+
+                      <h3
+                        onClick={() => onSelectProduct(product)}
+                        className="font-display font-bold text-sm text-[#0B0B0D] hover:text-[#FF7A00] transition-colors cursor-pointer line-clamp-1"
+                      >
+                        {product.name}
+                      </h3>
+
+                      <p className="text-[11px] text-zinc-500 line-clamp-2 mt-1">
+                        {product.shortDesc}
+                      </p>
+                    </div>
+
+                    {/* Tiered Price Matrix */}
+                    <div className="pt-2 border-t border-[#F0EFF5]">
+                      <div className="flex items-baseline justify-between">
+                        <div>
+                          <div className="text-[10px] text-zinc-400 uppercase font-mono">Bulk from:</div>
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="font-display font-bold text-lg text-[#0B0B0D] tabular-nums">
+                              ₹{lowestTier ? lowestTier.price : product.basePrice}
+                            </span>
+                            <span className="text-xs text-zinc-500 font-mono">
+                              / {product.id === 'prod-visiting-card-300gsm' ? 'card' : 'pc'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-zinc-600 font-bold bg-zinc-100 px-2 py-0.5 rounded font-mono">
+                            Volume Rates
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    {product.id === 'prod-rollup-standee' ? (
+                      <div className="pt-1">
+                        <button
+                          onClick={() => onSelectProduct(product)}
+                          className="w-full bg-[#FF7A00] hover:bg-[#e06c00] active:scale-98 text-white text-xs font-display font-semibold py-2.5 rounded-lg transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          <span>View Details</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          onClick={() => onCustomizeProduct(product.id)}
+                          className="w-full bg-[#FF7A00] hover:bg-[#e06c00] text-white text-xs font-display font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>Customize</span>
+                        </button>
+
+                        <button
+                          onClick={() => onSelectProduct(product)}
+                          className="w-full bg-[#0B0B0D] hover:bg-[#1f2026] text-white text-xs font-display font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <span>Details</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+};

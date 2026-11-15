@@ -1,0 +1,591 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Poppins', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Poppins', system-ui, -apple-system, sans-serif;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Poppins', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  
+  body {
+    background-color: #F4F2FA;
+    color: #1A1B22;
+    font-family: 'Poppins', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overscroll-behavior-y: none;
+  }
+}
+
+.font-display {
+  font-family: 'Poppins', sans-serif;
+}
+
+.font-sans {
+  font-family: 'Poppins', sans-serif;
+}
+
+/* Hide scrollbars for smooth touch carousels on mobile & tablet */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1EFF7;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #C8C6D0;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #FF7A00;
+}
+
+/* Continuous Marquee Scrolling Animation */
+@keyframes continuous-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-announcement-marquee {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: continuous-marquee 32s linear infinite;
+}
+
+.announcement-marquee-track:hover .animate-announcement-marquee {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-announcement-marquee {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* Client Logos Marquee Animation */
+.animate-client-logos-marquee {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: continuous-marquee 30s linear infinite;
+}
+
+.client-logos-track:hover .animate-client-logos-marquee {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-client-logos-marquee {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* Diwali Fuljhari Sparkle Keyframes */
+@keyframes sparkler-twinkle {
+  0%, 100% {
+    opacity: 0.2;
+    transform: scale(0.6) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2) rotate(180deg);
+    filter: drop-shadow(0 0 6px #FFD700);
+  }
+}
+
+.animate-sparkler-twinkle {
+  animation: sparkler-twinkle 2.5s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   PREMIUM ICON ANIMATIONS & MICRO-INTERACTIONS
+   ========================================================================== */
+
+/* Universal smooth transition for all Lucide / SVG icons */
+svg.lucide,
+svg[data-icon],
+.icon-animated {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+              filter 0.3s ease,
+              color 0.2s ease,
+              stroke 0.2s ease;
+  will-change: transform;
+}
+
+/* 1. Subtle Float Animation (for reassurance badges, trust items) */
+@keyframes icon-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-icon-float {
+  animation: icon-float 3.5s ease-in-out infinite;
+}
+
+.animate-icon-float-delayed {
+  animation: icon-float 3.5s ease-in-out 1.2s infinite;
+}
+
+/* 2. Gentle Pulse & Glow (for star ratings, sparkles, guarantee shields) */
+@keyframes icon-pulse-glow {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(255, 122, 0, 0));
+  }
+  50% {
+    transform: scale(1.1);
+    filter: drop-shadow(0 0 6px rgba(255, 122, 0, 0.5));
+  }
+}
+
+.animate-icon-pulse-glow {
+  animation: icon-pulse-glow 2.8s ease-in-out infinite;
+}
+
+/* 3. Subtle Phone / Notification Ring (for WhatsApp, Phone, Support) */
+@keyframes icon-ring-shake {
+  0%, 100% {
+    transform: rotate(0deg) scale(1);
+  }
+  10%, 30% {
+    transform: rotate(-14deg) scale(1.12);
+  }
+  20%, 40% {
+    transform: rotate(14deg) scale(1.12);
+  }
+  50% {
+    transform: rotate(0deg) scale(1.05);
+  }
+}
+
+.animate-icon-ring {
+  animation: icon-ring-shake 4.5s ease-in-out infinite;
+}
+
+/* 4. Elegant Slow Rotation (for Sparkles, Settings, Gears) */
+@keyframes icon-spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-icon-spin-slow {
+  animation: icon-spin-slow 16s linear infinite;
+}
+
+/* 5. Playful Wiggle (for Cart bag, Tags, Gift boxes) */
+@keyframes icon-wiggle {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-8deg) scale(1.08);
+  }
+  75% {
+    transform: rotate(8deg) scale(1.08);
+  }
+}
+
+.animate-icon-wiggle {
+  animation: icon-wiggle 3s ease-in-out infinite;
+}
+
+/* 6. Gentle Breathing Truck / Delivery Motion */
+@keyframes icon-truck-drive {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+}
+
+.animate-icon-drive {
+  animation: icon-truck-drive 2.2s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   INTERACTIVE HOVER MICRO-ANIMATIONS (BUTTONS, CARDS, LINKS)
+   ========================================================================== */
+
+/* Button hover: icon springs up / forward */
+button:hover svg.lucide,
+a:hover svg.lucide,
+.group:hover .group-hover-icon {
+  transform: translateY(-1.5px) scale(1.08);
+}
+
+/* Specific icon behaviors on hover */
+button:hover svg.lucide-arrow-right,
+a:hover svg.lucide-arrow-right,
+.group:hover svg.lucide-arrow-right,
+button:hover svg.lucide-chevron-right,
+a:hover svg.lucide-chevron-right,
+.group:hover svg.lucide-chevron-right {
+  transform: translateX(4px);
+}
+
+button:hover svg.lucide-arrow-left,
+a:hover svg.lucide-arrow-left,
+.group:hover svg.lucide-arrow-left,
+button:hover svg.lucide-chevron-left,
+a:hover svg.lucide-chevron-left,
+.group:hover svg.lucide-chevron-left {
+  transform: translateX(-4px);
+}
+
+button:hover svg.lucide-shopping-bag,
+button:hover svg.lucide-shopping-cart,
+.group:hover svg.lucide-shopping-bag,
+.group:hover svg.lucide-shopping-cart {
+  transform: rotate(-10deg) scale(1.15);
+}
+
+button:hover svg.lucide-trash-2,
+button:hover svg.lucide-trash {
+  transform: rotate(8deg) scale(1.1);
+  color: #EF4444;
+}
+
+button:hover svg.lucide-sparkles,
+.group:hover svg.lucide-sparkles {
+  transform: rotate(20deg) scale(1.2);
+  filter: drop-shadow(0 0 6px #FF7A00);
+}
+
+button:hover svg.lucide-search,
+.group:hover svg.lucide-search {
+  transform: rotate(12deg) scale(1.15);
+}
+
+button:hover svg.lucide-phone,
+a:hover svg.lucide-phone,
+button:hover svg.lucide-message-circle,
+a:hover svg.lucide-message-circle {
+  animation: icon-ring-shake 0.8s ease-in-out;
+}
+
+button:hover svg.lucide-rotate-ccw,
+button:hover svg.lucide-refresh-cw {
+  transform: rotate(180deg);
+}
+
+button:hover svg.lucide-upload,
+.group:hover svg.lucide-upload {
+  transform: translateY(-3px) scale(1.1);
+}
+
+button:hover svg.lucide-download,
+.group:hover svg.lucide-download {
+  transform: translateY(3px) scale(1.1);
+}
+
+button:hover svg.lucide-star,
+.group:hover svg.lucide-star {
+  transform: scale(1.25) rotate(10deg);
+  filter: drop-shadow(0 0 5px rgba(255, 122, 0, 0.6));
+}
+
+button:hover svg.lucide-heart,
+.group:hover svg.lucide-heart {
+  transform: scale(1.22);
+}
+
+/* Active depression feedback on click */
+button:active svg.lucide {
+  transform: scale(0.92);
+}
+
+/* Custom interactive icon wrapper classes */
+.icon-box-hover {
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.icon-box-hover:hover {
+  transform: translateY(-2px) scale(1.05);
+}
+
+.icon-box-hover:hover svg {
+  transform: scale(1.15);
+}
+
+/* FAQ Section Micro-Animations */
+@keyframes faq-float-slow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-7px) rotate(1.5deg);
+  }
+}
+
+@keyframes faq-float-reverse {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(6px) rotate(-1.5deg);
+  }
+}
+
+@keyframes faq-sparkle {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.animate-faq-float {
+  animation: faq-float-slow 3.8s ease-in-out infinite;
+}
+
+.animate-faq-float-reverse {
+  animation: faq-float-reverse 4.2s ease-in-out infinite;
+}
+
+.animate-faq-sparkle {
+  animation: faq-sparkle 2.6s ease-in-out infinite;
+}
+
+/* Promo Table Feature Highlights Animated Icons */
+@keyframes icon-megaphone-pulse {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+  }
+  25% {
+    transform: scale(1.08) rotate(-4deg) translateX(1px);
+  }
+  50% {
+    transform: scale(1.12) rotate(2deg) translateX(2px);
+  }
+  75% {
+    transform: scale(1.06) rotate(-2deg) translateX(1px);
+  }
+}
+
+.animate-icon-megaphone {
+  animation: icon-megaphone-pulse 2.4s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+@keyframes icon-feather-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(3deg);
+  }
+}
+
+.animate-icon-feather {
+  animation: icon-feather-float 2.8s ease-in-out infinite;
+}
+
+@keyframes icon-wrench-rock {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-9deg);
+  }
+  75% {
+    transform: rotate(9deg);
+  }
+}
+
+.animate-icon-wrench {
+  animation: icon-wrench-rock 2.2s ease-in-out infinite;
+  transform-origin: center center;
+}
+
+@keyframes icon-recycle-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-icon-recycle {
+  animation: icon-recycle-spin 7s linear infinite;
+  transform-origin: center center;
+}
+
+/* 7 Umbrella Features Continuous Looped Animations */
+@keyframes icon-layers-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-icon-layers {
+  animation: icon-layers-float 3s ease-in-out infinite;
+}
+
+@keyframes icon-shield-pulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(255, 122, 0, 0));
+  }
+  50% {
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 4px rgba(255, 122, 0, 0.4));
+  }
+}
+
+.animate-icon-shield {
+  animation: icon-shield-pulse 2.8s ease-in-out infinite;
+}
+
+@keyframes icon-wind-sway {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+}
+
+.animate-icon-wind {
+  animation: icon-wind-sway 2.5s ease-in-out infinite;
+}
+
+@keyframes icon-printer-bounce {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-3px) scale(1.06);
+  }
+}
+
+.animate-icon-printer {
+  animation: icon-printer-bounce 2.6s ease-in-out infinite;
+}
+
+/* Accessibility: Respect Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  svg.lucide,
+  svg[data-icon],
+  .icon-animated,
+  .animate-icon-float,
+  .animate-icon-float-delayed,
+  .animate-icon-pulse-glow,
+  .animate-icon-ring,
+  .animate-icon-spin-slow,
+  .animate-icon-wiggle,
+  .animate-icon-drive,
+  .animate-faq-float,
+  .animate-faq-float-reverse,
+  .animate-faq-sparkle,
+  .animate-icon-megaphone,
+  .animate-icon-feather,
+  .animate-icon-wrench,
+  .animate-icon-recycle,
+  .animate-icon-layers,
+  .animate-icon-shield,
+  .animate-icon-wind,
+  .animate-icon-printer {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* Print Styles for Tax Invoices and Quotations */
+@media print {
+  header,
+  footer,
+  nav,
+  .announcement-marquee-track,
+  [aria-label="Mobile Bottom Navigation"],
+  a[aria-label*="WhatsApp"],
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #111215 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .fixed.inset-0.z-50 {
+    position: static !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  #printable-quotation,
+  #printable-tax-invoice,
+  #printable-dashboard-invoice {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0.5rem !important;
+    margin: 0 auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  @page {
+    margin: 1cm;
+    size: auto;
+  }
+}

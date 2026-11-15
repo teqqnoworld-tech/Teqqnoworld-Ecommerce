@@ -1,0 +1,207 @@
+import React from 'react';
+import { ShieldCheck, Lock, FileText, Mail, MapPin, ExternalLink } from 'lucide-react';
+import { BUSINESS_DETAILS, LEGAL_PAGES } from '../data/legalData';
+import { WhatsAppIcon } from './WhatsAppIcon';
+
+interface FooterProps {
+  onNavigate: (tabOrRoute: string) => void;
+  onOpenSupabaseDev?: () => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onNavigate, onOpenSupabaseDev }) => {
+  return (
+
+    <footer className="bg-[#111215] text-zinc-400 border-t border-[#2A2A30] text-xs">
+      {/* 1. Pre-Footer 3-Column Trust Strip */}
+      <div className="border-b border-[#2A2A30] py-6 bg-[#16171B]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            {/* Item 1 */}
+            <div className="flex items-center gap-3 group cursor-default">
+              <div className="w-10 h-10 rounded-full bg-[#FF7A00]/10 border border-[#FF7A00]/20 text-[#FF7A00] flex items-center justify-center shrink-0 group-hover:scale-110 group-hover:bg-[#FF7A00]/20 transition-all duration-300">
+                <ShieldCheck className="w-5 h-5 group-hover:scale-115 transition-transform duration-300 animate-icon-pulse-glow" />
+              </div>
+              <div>
+                <div className="font-display font-bold text-xs text-white group-hover:text-[#FF7A00] transition-colors">100% In-House QA Standards</div>
+                <div className="text-[11px] text-zinc-400 mt-0.5">Manual digital & physical color calibration</div>
+              </div>
+            </div>
+
+            {/* Item 2 */}
+            <div className="flex items-center gap-3 group cursor-default">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-110 group-hover:bg-emerald-500/20 transition-all duration-300">
+                <Lock className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform duration-300 animate-icon-float" />
+              </div>
+              <div>
+                <div className="font-display font-bold text-xs text-white group-hover:text-emerald-400 transition-colors">RBI & PCI-DSS Gateway Compliant</div>
+                <div className="text-[11px] text-zinc-400 mt-0.5">Secure Razorpay + UPI + NetBanking integration</div>
+              </div>
+            </div>
+
+            {/* Item 3 */}
+            <div className="flex items-center gap-3 group cursor-default">
+              <div className="w-10 h-10 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-110 group-hover:bg-purple-500/20 transition-all duration-300">
+                <FileText className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform duration-300 animate-icon-float-delayed" />
+              </div>
+              <div>
+                <div className="font-display font-bold text-xs text-white group-hover:text-purple-400 transition-colors">GST Invoicing (SAC 9989)</div>
+                <div className="text-[11px] text-zinc-400 mt-0.5">18% Input Tax Credit claim on all corporate orders</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Main Multi-Column Footer Grid */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-28 md:pb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 pb-12 border-b border-[#2A2A30]">
+          
+          {/* Col 1 (4 cols): Brand Info & Verified Coordinates */}
+          <div className="lg:col-span-4 space-y-4">
+            <div className="flex items-center gap-2.5 group cursor-default">
+              <div className="w-8 h-8 rounded-lg bg-[#FF7A00] flex items-center justify-center font-display font-bold text-white text-base group-hover:scale-110 transition-transform duration-300 shadow-xs">
+                T
+              </div>
+              <span className="font-display font-bold text-xl text-white">
+                Teqqno<span className="text-[#FF7A00]">World</span>
+              </span>
+            </div>
+
+            <p className="text-zinc-400 text-xs leading-relaxed max-w-sm">
+              India's trusted custom printing and corporate merchandise partner. Direct from production to your office doorstep across India.
+            </p>
+
+            <div className="space-y-2 pt-1 text-xs">
+              <div className="flex items-center gap-2 text-zinc-300 group">
+                <WhatsAppIcon variant="badge" className="w-4 h-4 group-hover:animate-icon-ring transition-transform" />
+                <a 
+                  href={`https://wa.me/${BUSINESS_DETAILS.whatsappHelp.replace(/[^0-9]/g, '')}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="hover:text-white transition-colors"
+                >
+                  WhatsApp / Help: {BUSINESS_DETAILS.whatsappHelp}
+                </a>
+              </div>
+
+              <div className="flex items-center gap-2 text-zinc-300 group">
+                <Mail className="w-3.5 h-3.5 text-[#FF7A00] group-hover:rotate-12 group-hover:scale-115 transition-transform" />
+                <a 
+                  href={`mailto:${BUSINESS_DETAILS.supportEmail}`} 
+                  className="hover:text-white transition-colors"
+                >
+                  {BUSINESS_DETAILS.supportEmail}
+                </a>
+              </div>
+
+              <div className="flex items-start gap-2 text-zinc-400 group pt-1">
+                <MapPin className="w-3.5 h-3.5 text-[#FF7A00] shrink-0 mt-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                <span className="text-[11px] leading-snug">
+                  {BUSINESS_DETAILS.facilityAddress}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Col 2 (2 cols): Product Categories */}
+          <div className="lg:col-span-2 space-y-3">
+            <h4 className="font-display font-bold text-xs uppercase tracking-wider text-white">
+              PRODUCTS
+            </h4>
+            <ul className="space-y-2 text-zinc-400 text-xs">
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Custom Apparel & Hoodies</button></li>
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Visiting Cards & Stationery</button></li>
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Drinkware & Sippers</button></li>
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Lanyards & ID Cards</button></li>
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Tech Accessories & Sleeves</button></li>
+              <li><button onClick={() => onNavigate('catalog')} className="hover:text-white transition-colors cursor-pointer text-left">Festive & Diwali Hampers</button></li>
+            </ul>
+          </div>
+
+          {/* Col 3 (3 cols): Corporate Solutions & Tracking */}
+          <div className="lg:col-span-3 space-y-3">
+            <h4 className="font-display font-bold text-xs uppercase tracking-wider text-white">
+              CORPORATE SOLUTIONS
+            </h4>
+            <ul className="space-y-2 text-zinc-400 text-xs">
+              <li><button onClick={() => onNavigate('orders')} className="hover:text-white transition-colors cursor-pointer text-left flex items-center gap-1.5"><span className="text-emerald-400">●</span> Track Your Consignment</button></li>
+              <li><button onClick={() => onNavigate('quote-calculator')} className="hover:text-white transition-colors cursor-pointer text-left text-[#FF7A00] font-semibold">⚡ B2B Volume Quote Calculator</button></li>
+              <li><button onClick={() => onNavigate('bundle-builder')} className="hover:text-white transition-colors cursor-pointer text-left text-emerald-400 font-semibold">🎁 Corporate Gift Bundle Builder</button></li>
+              <li><button onClick={() => onNavigate('catalogues')} className="hover:text-white transition-colors cursor-pointer text-left">📑 Download PDF Catalogues</button></li>
+              <li><button onClick={() => onNavigate('bulk')} className="hover:text-white transition-colors cursor-pointer text-left">Enterprise Bulk RFQ</button></li>
+              <li><button onClick={() => onNavigate('customizer')} className="hover:text-white transition-colors cursor-pointer text-left">Online Custom Logo Studio</button></li>
+              <li><button onClick={() => onNavigate('dashboard')} className="hover:text-white transition-colors cursor-pointer text-left">Corporate Client Dashboard</button></li>
+              <li><button onClick={() => onNavigate('/pricing-and-taxes')} className="hover:text-white transition-colors cursor-pointer text-left">B2B GST & Volume Discounts</button></li>
+              <li><button onClick={() => onNavigate('/contact-us')} className="hover:text-white transition-colors cursor-pointer text-left">Procurement Vendor Desk</button></li>
+            </ul>
+          </div>
+
+          {/* Col 4 (3 cols): Dedicated Legal & Policies Column */}
+          <div className="lg:col-span-3 space-y-3">
+            <h4 className="font-display font-bold text-xs uppercase tracking-wider text-white flex items-center gap-1.5">
+              <span className="text-[#FF7A00]">§</span>
+              <span>LEGAL & POLICIES</span>
+            </h4>
+            <ul className="space-y-1.5 text-zinc-400 text-xs">
+              {LEGAL_PAGES.map((page) => (
+                <li key={page.id}>
+                  <button 
+                    onClick={() => onNavigate(page.route)} 
+                    className="hover:text-[#FF7A00] transition-colors text-left flex items-center justify-between w-full group py-0.5 cursor-pointer"
+                  >
+                    <span className="truncate group-hover:translate-x-1 transition-transform">
+                      {page.title}
+                    </span>
+                    <span className="text-zinc-600 group-hover:text-[#FF7A00] text-[10px] shrink-0 ml-1">
+                      &rarr;
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+        </div>
+
+        {/* Bottom Copyright & Quick Legal Strip */}
+        <div className="pt-8 pb-20 md:pb-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-zinc-500">
+          <div>
+            © 2026 {BUSINESS_DETAILS.brandName}. All rights reserved. Pan-India Delivery.
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-zinc-400">
+            <button 
+              onClick={() => onNavigate('/privacy-policy')} 
+              className="hover:text-white transition-colors cursor-pointer"
+            >
+              Privacy Policy
+            </button>
+            <span className="text-zinc-700">•</span>
+            <button 
+              onClick={() => onNavigate('/terms-and-conditions')} 
+              className="hover:text-white transition-colors cursor-pointer"
+            >
+              Terms and Conditions
+            </button>
+            <span className="text-zinc-700">•</span>
+            <button 
+              onClick={() => onNavigate('/cancellation-refund-policy')} 
+              className="hover:text-white transition-colors cursor-pointer"
+            >
+              Cancellation & Refund
+            </button>
+            <span className="text-zinc-700">•</span>
+            <button 
+              onClick={() => onNavigate('/contact-us')} 
+              className="hover:text-white transition-colors cursor-pointer"
+            >
+              Contact Support
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </footer>
+  );
+};
