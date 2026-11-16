@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Lock, FileText, Mail, MapPin, ExternalLink } from 'lucide-react';
+import { ShieldCheck, Lock, FileText, Mail, MapPin, Truck, RotateCcw, Headphones } from 'lucide-react';
 import { BUSINESS_DETAILS, LEGAL_PAGES } from '../data/legalData';
 import { WhatsAppIcon } from './WhatsAppIcon';
 
@@ -167,36 +167,48 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, onOpenSupabaseDev })
 
         {/* Bottom Copyright & Quick Legal Strip */}
         <div className="pt-8 pb-20 md:pb-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-zinc-500">
-          <div>
-            © 2026 {BUSINESS_DETAILS.brandName}. All rights reserved. Pan-India Delivery.
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#FF7A00] animate-icon-pulse-glow shrink-0" />
+              <span>© 2026 {BUSINESS_DETAILS.brandName}. All rights reserved.</span>
+            </span>
+            <span className="text-zinc-700 hidden sm:inline">•</span>
+            <span className="inline-flex items-center gap-1.5 text-zinc-400">
+              <Truck className="w-3.5 h-3.5 text-emerald-400 animate-icon-drive shrink-0" />
+              <span>Pan-India Delivery</span>
+            </span>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-zinc-400">
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-5 text-zinc-400">
             <button 
               onClick={() => onNavigate('/privacy-policy')} 
-              className="hover:text-white transition-colors cursor-pointer"
+              className="group inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
             >
-              Privacy Policy
+              <Lock className="w-3 h-3 text-emerald-400 animate-icon-float group-hover:scale-110 transition-transform" />
+              <span>Privacy Policy</span>
             </button>
             <span className="text-zinc-700">•</span>
             <button 
               onClick={() => onNavigate('/terms-and-conditions')} 
-              className="hover:text-white transition-colors cursor-pointer"
+              className="group inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
             >
-              Terms and Conditions
+              <FileText className="w-3 h-3 text-[#FF7A00] animate-icon-float-delayed group-hover:scale-110 transition-transform" />
+              <span>Terms and Conditions</span>
             </button>
             <span className="text-zinc-700">•</span>
             <button 
               onClick={() => onNavigate('/cancellation-refund-policy')} 
-              className="hover:text-white transition-colors cursor-pointer"
+              className="group inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
             >
-              Cancellation & Refund
+              <RotateCcw className="w-3 h-3 text-amber-400 animate-icon-wiggle group-hover:-rotate-90 transition-transform duration-300" />
+              <span>Cancellation & Refund</span>
             </button>
             <span className="text-zinc-700">•</span>
             <button 
               onClick={() => onNavigate('/contact-us')} 
-              className="hover:text-white transition-colors cursor-pointer"
+              className="group inline-flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
             >
-              Contact Support
+              <Headphones className="w-3 h-3 text-sky-400 animate-icon-ring group-hover:scale-110 transition-transform" />
+              <span>Contact Support</span>
             </button>
           </div>
         </div>
