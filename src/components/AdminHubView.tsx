@@ -1,11 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Lock,
   Unlock,
   Package,
   ShoppingCart,
-  TrendingUp,
-  IndianRupee,
   Truck,
   CheckCircle2,
   Clock,
@@ -16,41 +14,51 @@ import {
   Check,
   ExternalLink,
   Eye,
-  Phone,
   Mail,
-  Building2,
   BarChart3,
   Layers,
   Download,
   LogOut,
   ArrowLeft,
   X,
-  FileText,
-  UserCheck,
   Send,
-  CreditCard,
   MapPin,
   Printer,
   Loader2,
   LayoutGrid,
   List,
   ChevronRight,
-  Calendar,
+  ChevronDown,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
   Receipt,
   ArrowUpRight,
   Menu,
+  Home,
+  Users,
+  Megaphone,
+  Bell,
+  HelpCircle,
+  Plus,
+  SlidersHorizontal,
+  MoreHorizontal,
+  Box,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import {
   CustomOrderRow,
   OrderStatus,
+  ProductRow,
   isSupabaseConfigured,
 } from '../lib/supabase';
 import {
   fetchCustomOrdersFromSupabase,
+  fetchProductsFromSupabase,
   updateCustomOrderStatus,
   fetchAbandonedCheckoutsFromSupabase,
   markCheckoutRecovered,
+  submitCustomOrderQuote,
 } from '../services/supabaseService';
 import {
   sendOrderConfirmationEmail,
@@ -75,163 +83,36 @@ import {
 import { generateAdminOrderInvoicePdf } from '../utils/pdfGenerator';
 import { getDirectClientWhatsAppUrl } from '../utils/whatsapp';
 import { PRODUCTS } from '../data/mockData';
+import {
+  AdminSection,
+  OrdersSubMode,
+  STATUS_META,
+  parseOrderNotes,
+  getOrderEstimates,
+  getOrderThumbnail,
+  formatOrderRef,
+  getPaymentBadge,
+  buildDailyTrendSeries,
+} from './admin/adminUtils';
+import { AdminKpiCard, OrderThumb } from './admin/AdminVisuals';
+import {
+  DashboardOverviewView,
+  ProductsCatalogView,
+  CustomersDirectoryView,
+  MarketingRecoveryView,
+  ReportsAnalyticsView,
+  DispatchCenterView,
+  IntegrationsSetupView,
+  AnalyticsSummary,
+} from './admin/AdminSubViews';
 
 interface AdminHubViewProps {
   onBackToStore: () => void;
   onNavigateToOrderTracking?: (orderNumber: string) => void;
 }
 
-type AdminTab = 'orders' | 'dispatch' | 'abandoned' | 'analytics' | 'schema';
-
 const DEFAULT_PIN = '9949';
-
-const STATUS_META: Record<
-  OrderStatus,
-  { label: string; colorClass: string; barClass: string }
-> = {
-  pending: {
-    label: 'Pending Review',
-    colorClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-    barClass: 'bg-amber-400',
-  },
-  approved: {
-    label: 'Proof Approved',
-    colorClass: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
-    barClass: 'bg-sky-400',
-  },
-  'in-production': {
-    label: 'In Production',
-    colorClass: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
-    barClass: 'bg-violet-400',
-  },
-  dispatched: {
-    label: 'Dispatched',
-    colorClass: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
-    barClass: 'bg-teal-400',
-  },
-  delivered: {
-    label: 'Delivered',
-    colorClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-    barClass: 'bg-emerald-400',
-  },
-};
-
-interface ParsedOrderNotes {
-  frontMockupUrl: string | null;
-  backMockupUrl: string | null;
-  backLogoUrl: string | null;
-  color: string | null;
-  size: string | null;
-  method: string | null;
-  placementSummary: string | null;
-  gstin: string | null;
-  poNumber: string | null;
-  paymentPlan: string | null;
-  paidAmount: string | null;
-  paidNumber: number | null;
-  balanceDue: string | null;
-  balanceNumber: number | null;
-  razorpayId: string | null;
-  customNotesText: string | null;
-  parsedAddress: {
-    full: string;
-    street: string;
-    city: string;
-    state: string;
-    pincode: string;
-  };
-  cleanNotes: string;
-}
-
-function parseOrderNotes(notes?: string | null): ParsedOrderNotes {
-  const raw = notes || '';
-  const frontMockupMatch = raw.match(/\[FrontMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
-  const backMockupMatch = raw.match(/\[BackMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
-  const backLogoMatch = raw.match(/\[BackLogo:\s*(https?:\/\/[^\s\]]+)\]/i);
-
-  const cleanNotes = raw
-    .replace(/\|\s*\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
-    .replace(/\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
-    .trim();
-
-  const extractField = (prefixRegex: RegExp): string | null => {
-    const match = cleanNotes.match(prefixRegex);
-    return match?.[1]?.trim() || null;
-  };
-
-  const color = extractField(/(?:^|\|)\s*Color:\s*([^|]+)/i);
-  const size = extractField(/(?:^|\|)\s*Size:\s*([^|]+)/i);
-  const method = extractField(/(?:^|\|)\s*Method:\s*([^|]+)/i);
-  const placementSummary = extractField(/(?:^|\|)\s*Position & Layout:\s*([^|]+)/i);
-  const customNotesText = extractField(/(?:^|\|)\s*Notes:\s*([^|]+)/i);
-  const gstin = extractField(/(?:^|\|)\s*GSTIN:\s*([^|]+)/i);
-  const poNumber = extractField(/(?:^|\|)\s*PO#:\s*([^|]+)/i);
-  const paymentPlan = extractField(/(?:^|\|)\s*Payment Plan:\s*([^|]+)/i);
-  const rzpMatch = cleanNotes.match(/Razorpay ID:\s*([^|\s]+)/i);
-  const paidMatch = cleanNotes.match(/Paid:\s*₹([0-9,]+)\s*\|\s*Balance Due:\s*₹([0-9,]+)/i);
-  const addrMatch = cleanNotes.match(/Address:\s*([^|]+)/i);
-
-  let street = '';
-  let city = '';
-  let state = '';
-  let pincode = '';
-  const fullAddr = addrMatch?.[1]?.trim() || '';
-  if (fullAddr) {
-    const pinSplit = fullAddr.match(/-\s*(\d{6})\s*$/);
-    if (pinSplit) pincode = pinSplit[1];
-    const withoutPin = fullAddr.replace(/-\s*\d{6}\s*$/, '').trim();
-    const parts = withoutPin
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (parts.length >= 3) {
-      state = parts[parts.length - 1];
-      city = parts[parts.length - 2];
-      street = parts.slice(0, parts.length - 2).join(', ');
-    } else {
-      street = withoutPin;
-    }
-  }
-
-  const paidStr = paidMatch?.[1] || null;
-  const dueStr = paidMatch?.[2] || null;
-  const paidNum = paidStr ? Number(paidStr.replace(/,/g, '')) : null;
-  const dueNum = dueStr ? Number(dueStr.replace(/,/g, '')) : null;
-
-  return {
-    frontMockupUrl: frontMockupMatch?.[1] || null,
-    backMockupUrl: backMockupMatch?.[1] || null,
-    backLogoUrl: backLogoMatch?.[1] || null,
-    color,
-    size,
-    method,
-    placementSummary,
-    gstin,
-    poNumber,
-    paymentPlan,
-    paidAmount: paidStr,
-    paidNumber: Number.isFinite(paidNum) ? paidNum : null,
-    balanceDue: dueStr,
-    balanceNumber: Number.isFinite(dueNum) ? dueNum : null,
-    razorpayId: rzpMatch?.[1] || null,
-    customNotesText,
-    parsedAddress: { full: fullAddr, street, city, state, pincode },
-    cleanNotes,
-  };
-}
-
-function getOrderEstimates(order: CustomOrderRow) {
-  const product = PRODUCTS.find((p) => p.id === order.product_id);
-  const unitPrice = product?.basePrice || 499;
-  const subtotal = unitPrice * (order.quantity || 1);
-  const gst = Math.round(subtotal * 0.18);
-  const total = subtotal + gst;
-  return { product, unitPrice, subtotal, gst, total };
-}
-
-function formatOrderRef(id: string) {
-  return id.startsWith('TQ-') ? id : `TQ-${id.slice(0, 8).toUpperCase()}`;
-}
+const LOGO_BADGE_SRC = '/assets/aistudio/Glossy_TeqqnoWorld_Branding_Badge-photoaidcom-cropped_1055f8dc.png';
 
 export const AdminHubView: React.FC<AdminHubViewProps> = ({
   onBackToStore,
@@ -249,16 +130,37 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [pinError, setPinError] = useState<string | null>(null);
 
   // Navigation & Responsive UI State
-  const [activeTab, setActiveTab] = useState<AdminTab>('orders');
+  const [activeSection, setActiveSection] = useState<AdminSection>('orders');
+  const [ordersSubMode, setOrdersSubMode] = useState<OrdersSubMode>('queue');
+  const [ordersMenuExpanded, setOrdersMenuExpanded] = useState<boolean>(true);
+  const [integrationsMenuExpanded, setIntegrationsMenuExpanded] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [ordersViewMode, setOrdersViewMode] = useState<'table' | 'cards'>('table');
 
+  // Header Popovers
+  const [bellOpen, setBellOpen] = useState<boolean>(false);
+  const [helpOpen, setHelpOpen] = useState<boolean>(false);
+  const [profileOpen, setProfileOpen] = useState<boolean>(false);
+  const globalSearchRef = useRef<HTMLInputElement | null>(null);
+
   // Data State
   const [orders, setOrders] = useState<CustomOrderRow[]>([]);
+  const [dbProducts, setDbProducts] = useState<ProductRow[]>([]);
+  const [abandonedLeads, setAbandonedLeads] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState<boolean>(false);
+  const [loadingLeads, setLoadingLeads] = useState<boolean>(false);
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+
+  // Orders Filters, Selection & Pagination
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
-  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'paid' | 'partial' | 'pending'>('all');
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'highest'>('newest');
+  const [filtersOpen, setFiltersOpen] = useState<boolean>(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+  const [openRowMenuId, setOpenRowMenuId] = useState<string | null>(null);
 
   // Toast Notifications (non-blocking, zero window.alert)
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -266,12 +168,6 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setToast({ type, message });
     setTimeout(() => setToast(null), 4000);
   };
-
-  // Abandoned Leads State
-  const [abandonedLeads, setAbandonedLeads] = useState<any[]>([]);
-  const [loadingLeads, setLoadingLeads] = useState<boolean>(false);
-  const [leadSearchQuery, setLeadSearchQuery] = useState<string>('');
-  const [leadFilter, setLeadFilter] = useState<'all' | 'unrecovered' | 'recovered'>('all');
 
   // Order Inspector Drawer & Modals
   const [inspectingOrder, setInspectingOrder] = useState<CustomOrderRow | null>(null);
@@ -288,6 +184,19 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [creatingShipment, setCreatingShipment] = useState<boolean>(false);
   const [shipmentError, setShipmentError] = useState<string | null>(null);
 
+  // Create Manual Order Modal State
+  const [createOrderOpen, setCreateOrderOpen] = useState<boolean>(false);
+  const [newOrdCustomer, setNewOrdCustomer] = useState<string>('');
+  const [newOrdEmail, setNewOrdEmail] = useState<string>('');
+  const [newOrdPhone, setNewOrdPhone] = useState<string>('');
+  const [newOrdCompany, setNewOrdCompany] = useState<string>('');
+  const [newOrdProductId, setNewOrdProductId] = useState<string>(PRODUCTS[0]?.id || 'prod-polo-01');
+  const [newOrdQty, setNewOrdQty] = useState<number>(10);
+  const [newOrdAddress, setNewOrdAddress] = useState<string>('');
+  const [newOrdNotes, setNewOrdNotes] = useState<string>('');
+  const [newOrdPaymentPlan, setNewOrdPaymentPlan] = useState<'Full Prepaid (100% Online)' | 'Partial Payment (50% Advance)'>('Full Prepaid (100% Online)');
+  const [submittingNewOrder, setSubmittingNewOrder] = useState<boolean>(false);
+
   // Tracking State
   const [trackingModalData, setTrackingModalData] = useState<DelhiveryTrackResponse | null>(null);
   const [trackingOrderAwb, setTrackingOrderAwb] = useState<string | null>(null);
@@ -298,7 +207,6 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
   // Diagnostics & Tools State
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [copiedSql, setCopiedSql] = useState<boolean>(false);
   const [sendingEmailOrderId, setSendingEmailOrderId] = useState<string | null>(null);
   const [smtpStatus, setSmtpStatus] = useState<SmtpStatusResponse | null>(null);
   const [razorpayStatus, setRazorpayStatus] = useState<RazorpayStatus | null>(null);
@@ -326,9 +234,10 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setLoadingOrders(true);
     setLoadingLeads(true);
     try {
-      const [ordersRes, leadsRes, smtpRes, rzpRes, dlvRes] = await Promise.all([
+      const [ordersRes, leadsRes, prodRes, smtpRes, rzpRes, dlvRes] = await Promise.all([
         fetchCustomOrdersFromSupabase(),
         fetchAbandonedCheckoutsFromSupabase(),
+        fetchProductsFromSupabase(),
         getSmtpStatus(),
         getRazorpayStatus(),
         getDelhiveryStatus(),
@@ -336,6 +245,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       const loadedOrders = ordersRes.data || [];
       setOrders(loadedOrders);
       setAbandonedLeads(leadsRes.data || []);
+      setDbProducts(prodRes.data || []);
       setSmtpStatus(smtpRes);
       setRazorpayStatus(rzpRes);
       setDelhiveryStatus(dlvRes);
@@ -354,6 +264,30 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       loadData();
     }
   }, [isAuthenticated]);
+
+  // Ctrl+K / Cmd+K Quick Search Shortcut
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        globalSearchRef.current?.focus();
+      }
+      if (e.key === 'Escape') {
+        setBellOpen(false);
+        setHelpOpen(false);
+        setProfileOpen(false);
+        setFiltersOpen(false);
+        setOpenRowMenuId(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [orderSearchQuery, statusFilter, paymentFilter, sortBy, pageSize]);
 
   const handleUnlock = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -380,6 +314,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleSelectOrdersSubView = (mode: OrdersSubMode) => {
+    setActiveSection('orders');
+    setOrdersSubMode(mode);
+    if (mode === 'queue' || mode === 'all') {
+      setStatusFilter('all');
+    } else {
+      setStatusFilter(mode);
+    }
+    setMobileMenuOpen(false);
   };
 
   const handleStatusChange = async (orderId: string, newStatus: OrderStatus) => {
@@ -600,6 +545,59 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     }
   };
 
+  const handleCreateManualOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOrdCustomer.trim() || !newOrdPhone.trim() || !newOrdEmail.trim()) {
+      showToast('error', 'Please fill Customer Name, Phone, and Email.');
+      return;
+    }
+    setSubmittingNewOrder(true);
+    try {
+      const selectedProd = PRODUCTS.find((p) => p.id === newOrdProductId) || PRODUCTS[0];
+      const qty = Math.max(1, Number(newOrdQty) || 1);
+      const subtotal = (selectedProd?.basePrice || 499) * qty;
+      const totalEst = subtotal + Math.round(subtotal * 0.18);
+      const paidAmt = newOrdPaymentPlan.includes('50%') ? Math.round(totalEst * 0.5) : totalEst;
+      const balanceAmt = Math.max(0, totalEst - paidAmt);
+
+      const notesParts = [
+        selectedProd?.colors[0]?.name ? `Color: ${selectedProd.colors[0].name}` : null,
+        selectedProd?.printMethods[0] ? `Method: ${selectedProd.printMethods[0]}` : null,
+        newOrdNotes.trim() ? `Notes: ${newOrdNotes.trim()}` : 'Notes: Manual Admin Entry',
+        newOrdAddress.trim() ? `Address: ${newOrdAddress.trim()}` : null,
+        `Payment Plan: ${newOrdPaymentPlan}`,
+        `Paid: ₹${paidAmt.toLocaleString('en-IN')} | Balance Due: ₹${balanceAmt.toLocaleString('en-IN')}`,
+      ].filter(Boolean);
+
+      const res = await submitCustomOrderQuote({
+        customerName: newOrdCustomer.trim(),
+        customerEmail: newOrdEmail.trim(),
+        company: newOrdCompany.trim() || undefined,
+        phone: newOrdPhone.trim(),
+        productId: newOrdProductId,
+        quantity: qty,
+        customNotes: notesParts.join(' | '),
+      });
+
+      if (res.success && res.data) {
+        setOrders((prev) => [res.data!, ...prev]);
+        showToast('success', `Order #${formatOrderRef(res.data.id)} created successfully!`);
+        setCreateOrderOpen(false);
+        setNewOrdCustomer('');
+        setNewOrdEmail('');
+        setNewOrdPhone('');
+        setNewOrdCompany('');
+        setNewOrdAddress('');
+        setNewOrdNotes('');
+        setActiveSection('orders');
+      } else {
+        showToast('error', res.message || 'Could not create order.');
+      }
+    } finally {
+      setSubmittingNewOrder(false);
+    }
+  };
+
   const handleRecoverLead = async (leadId: string) => {
     await markCheckoutRecovered(leadId, 'MANUAL-RECOVERY');
     setAbandonedLeads((prev) =>
@@ -650,7 +648,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   };
 
   // Analytics & Derived Datasets
-  const analytics = useMemo(() => {
+  const analytics: AnalyticsSummary = useMemo(() => {
     const totalOrdersCount = orders.length;
     let totalRevenue = 0;
     let totalPaidRecorded = 0;
@@ -736,7 +734,12 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
   const filteredOrders = useMemo(() => {
     const q = orderSearchQuery.toLowerCase().trim();
-    return orders.filter((o) => {
+    const list = orders.filter((o) => {
+      const prod = PRODUCTS.find((p) => p.id === o.product_id);
+      const parsed = parseOrderNotes(o.custom_notes);
+      const { total } = getOrderEstimates(o);
+      const payBadge = getPaymentBadge(parsed, total);
+
       const matchesSearch =
         !q ||
         o.id.toLowerCase().includes(q) ||
@@ -745,12 +748,34 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
         o.customer_email?.toLowerCase().includes(q) ||
         o.phone?.includes(q) ||
         o.company?.toLowerCase().includes(q) ||
+        (prod?.name && prod.name.toLowerCase().includes(q)) ||
+        (o.product_id && o.product_id.toLowerCase().includes(q)) ||
         (o.tracking_number && o.tracking_number.toLowerCase().includes(q));
 
       const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
-      return matchesSearch && matchesStatus;
+      const matchesPayment = paymentFilter === 'all' || payBadge.kind === paymentFilter;
+      return matchesSearch && matchesStatus && matchesPayment;
     });
-  }, [orders, orderSearchQuery, statusFilter]);
+
+    if (sortBy === 'oldest') {
+      return [...list].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    }
+    if (sortBy === 'highest') {
+      return [...list].sort((a, b) => getOrderEstimates(b).total - getOrderEstimates(a).total);
+    }
+    return [...list].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }, [orders, orderSearchQuery, statusFilter, paymentFilter, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedOrders = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredOrders.slice(start, start + pageSize);
+  }, [filteredOrders, safePage, pageSize]);
 
   const readyToShipOrders = useMemo(
     () =>
@@ -772,28 +797,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     [orders]
   );
 
-  const filteredLeads = useMemo(() => {
-    const q = leadSearchQuery.toLowerCase().trim();
-    return abandonedLeads.filter((l) => {
-      const matchesSearch =
-        !q ||
-        l.id?.toLowerCase().includes(q) ||
-        l.customer_name?.toLowerCase().includes(q) ||
-        l.email?.toLowerCase().includes(q) ||
-        l.phone?.includes(q) ||
-        l.company?.toLowerCase().includes(q);
-
-      const matchesRecovery =
-        leadFilter === 'all'
-          ? true
-          : leadFilter === 'recovered'
-          ? l.recovered
-          : !l.recovered;
-      return matchesSearch && matchesRecovery;
-    });
-  }, [abandonedLeads, leadSearchQuery, leadFilter]);
-
-  const handleExportOrdersCsv = () => {
+  const exportOrdersListToCsv = (listToExport: CustomOrderRow[]) => {
     const headers = [
       'Order Ref',
       'Date',
@@ -817,7 +821,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       const str = String(val ?? '').replace(/"/g, '""');
       return `"${str}"`;
     };
-    const rows = filteredOrders.map((o) => {
+    const rows = listToExport.map((o) => {
       const { product, total } = getOrderEstimates(o);
       const parsed = parseOrderNotes(o.custom_notes);
       return [
@@ -852,32 +856,57 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    showToast('success', `Exported ${filteredOrders.length} orders to CSV.`);
+    showToast('success', `Exported ${listToExport.length} orders to CSV.`);
   };
 
+  const handleExportOrdersCsv = () => exportOrdersListToCsv(filteredOrders);
+
+  // Sparkline data computed from real orders
+  const sparkTotal = useMemo(() => buildDailyTrendSeries(orders, 7).map((d) => d.count), [orders]);
+  const sparkPending = useMemo(
+    () => buildDailyTrendSeries(orders.filter((o) => o.status === 'pending'), 7).map((d) => d.count),
+    [orders]
+  );
+  const sparkProd = useMemo(
+    () =>
+      buildDailyTrendSeries(
+        orders.filter((o) => o.status === 'approved' || o.status === 'in-production'),
+        7
+      ).map((d) => d.count),
+    [orders]
+  );
+  const sparkShip = useMemo(
+    () =>
+      buildDailyTrendSeries(
+        orders.filter((o) => o.status === 'dispatched' || o.status === 'delivered'),
+        7
+      ).map((d) => d.count),
+    [orders]
+  );
+
   // =========================================================================
-  // PIN GATE SCREEN
+  // PIN GATE SCREEN (Brand Navy #071B35 + Orange #FF7900 + White Card)
   // =========================================================================
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-center items-center p-4">
-        <div className="w-full max-w-md bg-[#121318] border border-white/[0.08] rounded-2xl p-8 space-y-6">
+      <div className="min-h-screen bg-gradient-to-br from-[#071B35] via-[#0B2547] to-[#071B35] flex flex-col justify-center items-center p-4">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-6 animate-admin-scale-in">
           <div className="text-center space-y-2">
-            <div className="w-14 h-14 rounded-2xl bg-[#FF7A00]/15 border border-[#FF7A00]/30 text-[#FF7A00] flex items-center justify-center mx-auto">
+            <div className="w-16 h-16 rounded-2xl bg-[#FFF4EB] border border-[#FFD8B8] text-[#FF7900] flex items-center justify-center mx-auto shadow-sm">
               <Lock className="w-7 h-7" />
             </div>
-            <p className="text-xs text-zinc-400">Business Owner Access</p>
-            <h1 className="font-display font-bold text-2xl tracking-tight text-white">
+            <p className="text-xs font-semibold text-[#FF7900]">Business Owner Access</p>
+            <h1 className="font-display font-bold text-2xl tracking-tight text-[#071B35]">
               TeqqnoWorld Operations Hub
             </h1>
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-slate-500">
               Enter your 4-digit security PIN to manage orders, Delhivery shipments, and payments.
             </p>
           </div>
 
           <form onSubmit={handleUnlock} className="space-y-4">
             <div>
-              <label className="block text-xs text-zinc-400 mb-1.5 text-center">
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5 text-center">
                 Master Security PIN
               </label>
               <input
@@ -887,34 +916,36 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 placeholder="••••"
                 value={enteredPin}
                 onChange={(e) => setEnteredPin(e.target.value)}
-                className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3.5 bg-[#0A0B0E] border border-white/[0.12] rounded-xl text-white focus:border-[#FF7A00] outline-none transition-colors placeholder:text-zinc-600"
+                className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none transition-colors placeholder:text-slate-300"
               />
             </div>
 
             {pinError && (
-              <div className="text-center text-xs text-red-300 bg-red-500/10 border border-red-500/25 py-2.5 px-3 rounded-xl flex items-center justify-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <div className="text-center text-xs text-red-700 bg-red-50 border border-red-200 py-2.5 px-3 rounded-xl flex items-center justify-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
                 <span>{pinError}</span>
               </div>
             )}
 
             <button
               type="submit"
-              className="w-full bg-[#FF7A00] hover:bg-[#e86e00] text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm min-h-[44px]"
+              className="w-full bg-[#FF7900] hover:bg-[#e56d00] text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm min-h-[44px] shadow-md shadow-[#FF7900]/20"
             >
               <Unlock className="w-4 h-4" />
               <span>Unlock Operations Hub</span>
             </button>
           </form>
 
-          <div className="pt-3 border-t border-white/[0.08] flex items-center justify-between text-xs text-zinc-400">
-            <span className="font-mono tabular-nums">Default PIN: <strong className="text-zinc-200">9949</strong></span>
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span className="font-mono tabular-nums">
+              Default PIN: <strong className="text-[#071B35]">9949</strong>
+            </span>
             <button
               onClick={onBackToStore}
-              className="text-[#FF7A00] hover:underline flex items-center gap-1 cursor-pointer"
+              className="text-[#FF7900] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
             >
               <span>Return to Store</span>
-              <ArrowRightIcon />
+              <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -922,461 +953,1057 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     );
   }
 
-  const navItems: Array<{
-    id: AdminTab;
-    label: string;
-    shortLabel: string;
-    icon: React.ComponentType<{ className?: string }>;
-    badge?: number;
-  }> = [
-    { id: 'orders', label: 'Orders Queue', shortLabel: 'Orders', icon: Package, badge: orders.length },
-    { id: 'dispatch', label: 'Delhivery & Dispatch', shortLabel: 'Delhivery', icon: Truck, badge: readyToShipOrders.length },
-    { id: 'abandoned', label: 'Abandoned Leads', shortLabel: 'Leads', icon: ShoppingCart, badge: analytics.unrecoveredCount },
-    { id: 'analytics', label: 'Analytics & Revenue', shortLabel: 'Analytics', icon: BarChart3 },
-    { id: 'schema', label: 'Integrations & Setup', shortLabel: 'Setup', icon: Layers },
-  ];
+  // Breadcrumb & Page Title Meta
+  const pageHeaderMeta: Record<
+    AdminSection,
+    { title: string; subtitle: string; breadcrumb: string; icon: React.ComponentType<{ className?: string }> }
+  > = {
+    dashboard: {
+      title: 'Executive Dashboard',
+      subtitle: 'Live business overview across custom orders, revenue, and dispatch operations.',
+      breadcrumb: 'Dashboard',
+      icon: Home,
+    },
+    orders: {
+      title:
+        ordersSubMode === 'queue'
+          ? 'Orders Queue'
+          : ordersSubMode === 'all'
+          ? 'All Orders'
+          : `${STATUS_META[ordersSubMode].shortLabel} Orders`,
+      subtitle: 'Manage, review and process all customer orders in one place.',
+      breadcrumb:
+        ordersSubMode === 'queue'
+          ? 'Orders Queue'
+          : ordersSubMode === 'all'
+          ? 'All Orders'
+          : `${STATUS_META[ordersSubMode].shortLabel} Orders`,
+      icon: ShoppingCart,
+    },
+    dispatch: {
+      title: 'Delhivery & Dispatch',
+      subtitle: 'Schedule Hyderabad pickups, generate live AWBs, and track Express deliveries.',
+      breadcrumb: 'Delhivery & Dispatch',
+      icon: Truck,
+    },
+    products: {
+      title: 'Products Catalog',
+      subtitle: 'Browse active TeqqnoWorld SKUs, bulk MOQs, and customization pricing.',
+      breadcrumb: 'Products',
+      icon: Box,
+    },
+    customers: {
+      title: 'Customers Directory',
+      subtitle: 'Verified B2B & corporate buyers aggregated from real storefront orders.',
+      breadcrumb: 'Customers',
+      icon: Users,
+    },
+    marketing: {
+      title: 'Marketing & Lead Recovery',
+      subtitle: 'Recover abandoned checkouts quickly via WhatsApp with direct cart context.',
+      breadcrumb: 'Marketing',
+      icon: Megaphone,
+    },
+    analytics: {
+      title: 'Reports & Analytics',
+      subtitle: 'Gross value, Razorpay collections, fulfillment velocity, and product leaders.',
+      breadcrumb: 'Reports & Analytics',
+      icon: BarChart3,
+    },
+    integrations: {
+      title: 'Integrations & Setup',
+      subtitle: 'Hostinger SMTP, Razorpay Live Gateway, Delhivery One, and Supabase PostgreSQL.',
+      breadcrumb: 'Integrations & Setup',
+      icon: Layers,
+    },
+  };
 
-  const activeNavMeta = navItems.find((n) => n.id === activeTab)!;
+  const currentMeta = pageHeaderMeta[activeSection];
+  const HeaderIcon = currentMeta.icon;
+
+  // Sidebar Content Renderer (Shared for Fixed Desktop Sidebar & Mobile Drawer)
+  const renderSidebarContent = (isMobile = false) => (
+    <div className="flex flex-col h-full bg-gradient-to-b from-[#071B35] via-[#071B35] to-[#041226] text-white select-none">
+      {/* Brand Lockup */}
+      <div className="px-5 h-16 flex items-center justify-between border-b border-white/[0.08] shrink-0">
+        <button
+          onClick={onBackToStore}
+          className="flex items-center gap-2.5 text-left group cursor-pointer min-w-0"
+          title="Back to Customer Store"
+        >
+          <img
+            src={LOGO_BADGE_SRC}
+            alt="TeqqnoWorld"
+            className="w-9 h-9 rounded-xl object-contain shrink-0 bg-white/5 p-0.5"
+          />
+          <div className="min-w-0">
+            <div className="font-display font-bold text-[15px] tracking-tight text-white leading-tight truncate">
+              Teqqno<span className="text-[#FF7900]">World</span>
+              <sup className="text-[9px] text-slate-400 ml-0.5">®</sup>
+            </div>
+            <div className="text-[10px] text-slate-400 truncate">
+              Custom Printing &amp; Corporate Gifts
+            </div>
+          </div>
+        </button>
+        {isMobile && (
+          <button
+            onClick={() => setMobileMenuOpen(false)}
+            className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 min-h-[40px] min-w-[40px] flex items-center justify-center"
+            aria-label="Close menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      {/* Navigation Tree */}
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto no-scrollbar text-xs">
+        {/* 1. Dashboard */}
+        <button
+          onClick={() => {
+            setActiveSection('dashboard');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'dashboard'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <Home className="w-4 h-4 shrink-0" />
+          <span>Dashboard</span>
+        </button>
+
+        {/* 2. Orders (Expandable Accordion Submenu matching reference) */}
+        <div className="pt-0.5">
+          <button
+            onClick={() => {
+              if (activeSection !== 'orders') {
+                setActiveSection('orders');
+                setOrdersMenuExpanded(true);
+              } else {
+                setOrdersMenuExpanded((v) => !v);
+              }
+            }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+              activeSection === 'orders'
+                ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+                : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <ShoppingCart className="w-4 h-4 shrink-0" />
+              <span>Orders</span>
+            </span>
+            <ChevronDown
+              className={`w-4 h-4 transition-transform duration-200 ${
+                ordersMenuExpanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          <div
+            className={`grid transition-[grid-template-rows,opacity] duration-250 ease-out ${
+              ordersMenuExpanded ? 'grid-rows-[1fr] opacity-100 mt-1' : 'grid-rows-[0fr] opacity-0'
+            }`}
+          >
+            <div className="overflow-hidden pl-2 space-y-0.5">
+              {(
+                [
+                  { id: 'queue', label: 'Orders Queue', count: orders.length },
+                  { id: 'all', label: 'All Orders' },
+                  { id: 'pending', label: 'Pending Orders', count: analytics.statusCounts.pending },
+                  { id: 'approved', label: 'Approved Orders', count: analytics.statusCounts.approved },
+                  { id: 'in-production', label: 'In Production', count: analytics.statusCounts['in-production'] },
+                  { id: 'dispatched', label: 'Dispatched Orders', count: analytics.statusCounts.dispatched },
+                  { id: 'delivered', label: 'Delivered Orders', count: analytics.statusCounts.delivered },
+                ] as Array<{ id: OrdersSubMode; label: string; count?: number }>
+              ).map((sub) => {
+                const isSubActive = activeSection === 'orders' && ordersSubMode === sub.id;
+                return (
+                  <button
+                    key={sub.id}
+                    onClick={() => handleSelectOrdersSubView(sub.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[12px] transition-all duration-150 cursor-pointer ${
+                      isSubActive
+                        ? 'bg-white/[0.1] text-white font-semibold border border-white/[0.08]'
+                        : 'text-slate-300/90 hover:text-white hover:bg-white/[0.04]'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2.5 truncate">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+                          isSubActive ? 'bg-[#FF7900]' : 'bg-slate-500'
+                        }`}
+                      />
+                      <span className="truncate">{sub.label}</span>
+                    </span>
+                    {typeof sub.count === 'number' && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded-md font-mono tabular-nums text-[10px] font-semibold ${
+                          isSubActive
+                            ? 'bg-[#FF7900] text-white'
+                            : 'bg-white/[0.08] text-slate-300'
+                        }`}
+                      >
+                        {sub.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Products */}
+        <button
+          onClick={() => {
+            setActiveSection('products');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'products'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <span className="flex items-center gap-3">
+            <Package className="w-4 h-4 shrink-0" />
+            <span>Products</span>
+          </span>
+          <span className="font-mono text-[10px] text-slate-400">{PRODUCTS.length}</span>
+        </button>
+
+        {/* 4. Customers */}
+        <button
+          onClick={() => {
+            setActiveSection('customers');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'customers'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <Users className="w-4 h-4 shrink-0" />
+          <span>Customers</span>
+        </button>
+
+        {/* 5. Marketing */}
+        <button
+          onClick={() => {
+            setActiveSection('marketing');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'marketing'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <span className="flex items-center gap-3">
+            <Megaphone className="w-4 h-4 shrink-0" />
+            <span>Marketing</span>
+          </span>
+          {analytics.unrecoveredCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded-md font-mono text-[10px] font-semibold bg-amber-500/20 text-amber-300">
+              {analytics.unrecoveredCount}
+            </span>
+          )}
+        </button>
+
+        {/* 6. Reports & Analytics */}
+        <button
+          onClick={() => {
+            setActiveSection('analytics');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'analytics'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4 shrink-0" />
+          <span>Reports &amp; Analytics</span>
+        </button>
+
+        {/* 7. Integrations & Setup (Expandable with Delhivery Dispatch + Gateways & SQL) */}
+        <div>
+          <button
+            onClick={() => {
+              setIntegrationsMenuExpanded((v) => !v);
+              if (activeSection !== 'integrations' && activeSection !== 'dispatch') {
+                setActiveSection('integrations');
+              }
+            }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+              activeSection === 'integrations' || activeSection === 'dispatch'
+                ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+                : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <Layers className="w-4 h-4 shrink-0" />
+              <span>Integrations &amp; Setup</span>
+            </span>
+            <ChevronDown
+              className={`w-4 h-4 transition-transform duration-200 ${
+                integrationsMenuExpanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          <div
+            className={`grid transition-[grid-template-rows,opacity] duration-250 ease-out ${
+              integrationsMenuExpanded || activeSection === 'dispatch' || activeSection === 'integrations'
+                ? 'grid-rows-[1fr] opacity-100 mt-1'
+                : 'grid-rows-[0fr] opacity-0'
+            }`}
+          >
+            <div className="overflow-hidden pl-2 space-y-0.5">
+              <button
+                onClick={() => {
+                  setActiveSection('dispatch');
+                  if (isMobile) setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[12px] cursor-pointer ${
+                  activeSection === 'dispatch'
+                    ? 'bg-white/[0.1] text-white font-semibold'
+                    : 'text-slate-300/90 hover:text-white hover:bg-white/[0.04]'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      activeSection === 'dispatch' ? 'bg-[#FF7900]' : 'bg-slate-500'
+                    }`}
+                  />
+                  <span>Delhivery Dispatch</span>
+                </span>
+                <span className="font-mono text-[10px] bg-white/[0.08] px-1.5 py-0.5 rounded">
+                  {readyToShipOrders.length}
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveSection('integrations');
+                  if (isMobile) setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] cursor-pointer ${
+                  activeSection === 'integrations'
+                    ? 'bg-white/[0.1] text-white font-semibold'
+                    : 'text-slate-300/90 hover:text-white hover:bg-white/[0.04]'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    activeSection === 'integrations' ? 'bg-[#FF7900]' : 'bg-slate-500'
+                  }`}
+                />
+                <span>Gateways, SMTP &amp; SQL</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Bottom Promo Card (matching reference aesthetic) */}
+      <div className="p-3.5 shrink-0">
+        <div
+          onClick={() => {
+            setActiveSection('analytics');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className="relative overflow-hidden rounded-2xl border border-white/[0.12] bg-gradient-to-br from-[#0D274C] to-[#041022] p-3.5 cursor-pointer group hover:border-[#FF7900]/50 transition-all"
+        >
+          <div className="flex items-center gap-3 mb-2">
+            <img
+              src="/assets/categories/cat_gift_sets.webp"
+              alt="TeqqnoWorld Business"
+              className="w-12 h-12 rounded-xl object-cover border border-white/10 shrink-0 group-hover:scale-105 transition-transform"
+            />
+            <div className="text-[12px] font-bold leading-snug text-white">
+              Grow Your Business with{' '}
+              <span className="text-[#FF7900]">TeqqnoWorld</span>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-300 leading-relaxed">
+            Manage orders, products and printing operations seamlessly.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-[#0A0B0E] text-zinc-100 flex font-sans">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#071B35] flex font-sans">
       {/* Non-blocking Status Toast */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-[70] text-xs font-semibold px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 border ${
+          className={`fixed top-4 right-4 z-[80] text-xs font-semibold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 border animate-admin-scale-in ${
             toast.type === 'success'
-              ? 'bg-emerald-950/95 border-emerald-500/40 text-emerald-200'
-              : 'bg-red-950/95 border-red-500/40 text-red-200'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-red-50 border-red-200 text-red-900'
           }`}
         >
           {toast.type === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           ) : (
-            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
           )}
           <span>{toast.message}</span>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* DESKTOP FIXED SIDEBAR (lg+) */}
+      {/* DESKTOP FIXED DARK NAVY SIDEBAR (#071B35) */}
       {/* ===================================================================== */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-[#121318] border-r border-white/[0.08] z-30">
-        {/* Sidebar Brand */}
-        <div className="px-5 h-16 flex items-center justify-between border-b border-white/[0.08]">
-          <button
-            onClick={onBackToStore}
-            className="text-left group cursor-pointer"
-          >
-            <div className="font-display font-bold text-base tracking-tight text-white whitespace-nowrap">
-              <span className="text-[#FF7A00]">Teqqno</span>World
-            </div>
-            <div className="text-[11px] text-zinc-400">Operations Hub</div>
-          </button>
-          <button
-            onClick={handleLock}
-            className="p-2 rounded-lg text-zinc-400 hover:text-red-300 hover:bg-red-500/10 transition-colors cursor-pointer"
-            title="Lock Admin Hub"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Navigation Links */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                  isActive
-                    ? 'bg-[#FF7A00] text-white font-semibold'
-                    : 'text-zinc-300 hover:text-white hover:bg-white/[0.05]'
-                }`}
-              >
-                <span className="flex items-center gap-2.5 truncate">
-                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-zinc-400'}`} />
-                  <span className="truncate">{item.label}</span>
-                </span>
-                {typeof item.badge === 'number' && (
-                  <span
-                    className={`font-mono tabular-nums text-[11px] ${
-                      isActive ? 'text-white/90 font-semibold' : 'text-zinc-400'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* System Integrations Summary */}
-        <div className="p-4 border-t border-white/[0.08] space-y-3 text-xs">
-          <div className="space-y-1.5 text-[11px]">
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>Database</span>
-              <span className={isSupabaseConfigured() ? 'text-emerald-400 font-medium' : 'text-amber-400'}>
-                {isSupabaseConfigured() ? 'Connected' : 'Pending'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>Hostinger SMTP</span>
-              <span className={smtpStatus?.configured ? 'text-emerald-400 font-medium' : 'text-amber-400'}>
-                {smtpStatus?.configured ? 'Active' : 'Setup'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>Delhivery One</span>
-              <span className={delhiveryStatus?.configured ? 'text-emerald-400 font-medium' : 'text-amber-400'}>
-                {delhiveryStatus?.configured ? 'Active' : 'Setup'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>Razorpay</span>
-              <span className={razorpayStatus?.configured ? 'text-emerald-400 font-medium' : 'text-zinc-400'}>
-                {razorpayStatus?.configured ? 'Live' : 'Sandbox'}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={onBackToStore}
-            className="w-full py-2.5 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <ArrowUpRight className="w-3.5 h-3.5 text-[#FF7A00]" />
-            <span>Open Customer Store</span>
-          </button>
-        </div>
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 z-30 shadow-xl">
+        {renderSidebarContent(false)}
       </aside>
 
       {/* Mobile Slide-Out Sidebar Drawer */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
-            className="fixed inset-0 bg-black/70"
+            className="fixed inset-0 bg-[#071B35]/60 backdrop-blur-xs"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <aside className="relative w-72 max-w-[82vw] bg-[#121318] border-r border-white/[0.08] flex flex-col h-full z-10">
-            <div className="px-4 h-14 flex items-center justify-between border-b border-white/[0.08]">
-              <span className="font-display font-bold text-base text-white">
-                <span className="text-[#FF7A00]">Teqqno</span>World Admin
-              </span>
-              <button
-                onClick={() => setMobileMenuOpen(false)}
-                className="p-2 text-zinc-400 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <nav className="flex-1 p-3 space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveTab(item.id);
-                      setMobileMenuOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium min-h-[44px] ${
-                      isActive ? 'bg-[#FF7A00] text-white font-semibold' : 'text-zinc-300 hover:bg-white/[0.05]'
-                    }`}
-                  >
-                    <span className="flex items-center gap-3">
-                      <Icon className="w-4 h-4 shrink-0" />
-                      <span>{item.label}</span>
-                    </span>
-                    {typeof item.badge === 'number' && (
-                      <span className="font-mono tabular-nums text-xs opacity-90">{item.badge}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-            <div className="p-4 border-t border-white/[0.08] space-y-2">
-              <button
-                onClick={onBackToStore}
-                className="w-full py-2.5 px-4 rounded-xl bg-white/[0.06] text-zinc-200 text-xs font-medium flex items-center justify-center gap-2 min-h-[44px]"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Customer Store</span>
-              </button>
-              <button
-                onClick={handleLock}
-                className="w-full py-2.5 px-4 rounded-xl bg-red-500/10 text-red-300 border border-red-500/20 text-xs font-medium flex items-center justify-center gap-2 min-h-[44px]"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Lock Admin Hub</span>
-              </button>
-            </div>
+          <aside className="relative w-72 max-w-[84vw] h-full z-10 shadow-2xl animate-admin-slide-left">
+            {renderSidebarContent(true)}
           </aside>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* MAIN CONTENT SHELL (Responsive Offset for Desktop Sidebar) */}
+      {/* MAIN WORKSPACE CONTENT */}
       {/* ===================================================================== */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Top Command Header */}
-        <header className="sticky top-0 z-20 h-14 sm:h-16 bg-[#0A0B0E]/90 backdrop-blur-md border-b border-white/[0.08] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+      <div className="flex-1 lg:pl-64 flex flex-col min-w-0 relative">
+        {/* Subtle Warm Orange Wave Mesh Glow behind Top Header (matches reference) */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute top-0 right-0 w-full h-72 overflow-hidden z-0"
+        >
+          <div
+            className="absolute -top-24 -right-20 w-[560px] h-[340px] rounded-full opacity-35 blur-3xl"
+            style={{
+              background:
+                'radial-gradient(circle at center, rgba(255,121,0,0.28) 0%, rgba(255,180,107,0.12) 45%, transparent 72%)',
+            }}
+          />
+        </div>
+
+        {/* TOP BAR HEADER */}
+        <header className="sticky top-0 z-20 h-16 bg-white/92 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 rounded-lg bg-[#121318] border border-white/[0.08] text-zinc-300 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center"
+              className="lg:hidden p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
               aria-label="Open menu"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="flex items-center gap-2 text-sm min-w-0">
-              <span className="text-zinc-500 hidden sm:inline">Operations</span>
-              <span className="text-zinc-600 hidden sm:inline">/</span>
-              <h1 className="font-display font-semibold text-white truncate">
-                {activeNavMeta.label}
-              </h1>
+
+            {/* Global Search Input with Ctrl+K */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                ref={globalSearchRef}
+                type="text"
+                placeholder="Search orders, customers, products, AWB..."
+                value={orderSearchQuery}
+                onChange={(e) => {
+                  setOrderSearchQuery(e.target.value);
+                  if (e.target.value && activeSection !== 'orders') {
+                    setActiveSection('orders');
+                  }
+                }}
+                className="w-full pl-10 pr-16 py-2 bg-slate-100/80 hover:bg-slate-100 focus:bg-white border border-slate-200/80 focus:border-[#FF7900] rounded-xl text-xs text-[#071B35] placeholder:text-slate-400 outline-none transition-all"
+              />
+              <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-[10px] font-mono text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2">
+                Ctrl + K
+              </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={loadData}
-              disabled={loadingOrders || loadingLeads}
-              className="px-3 py-2 rounded-xl bg-[#121318] hover:bg-white/[0.06] border border-white/[0.08] text-xs font-medium text-zinc-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap min-h-[40px]"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${loadingOrders || loadingLeads ? 'animate-spin text-[#FF7A00]' : 'text-zinc-400'}`}
-              />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
-
-            {activeTab === 'orders' && (
+          {/* Right Action Controls (Notification Bell, Help, Admin Profile) */}
+          <div className="flex items-center gap-2 shrink-0 relative">
+            {/* Notification Bell */}
+            <div className="relative">
               <button
-                onClick={handleExportOrdersCsv}
-                className="px-3 py-2 rounded-xl bg-[#121318] hover:bg-white/[0.06] border border-white/[0.08] text-xs font-medium text-zinc-200 flex items-center gap-1.5 cursor-pointer whitespace-nowrap min-h-[40px]"
+                onClick={() => {
+                  setBellOpen((v) => !v);
+                  setHelpOpen(false);
+                  setProfileOpen(false);
+                }}
+                className="relative p-2.5 rounded-xl text-slate-600 hover:text-[#071B35] hover:bg-slate-100 transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+                title="Pending Alerts & Notifications"
               >
-                <Download className="w-3.5 h-3.5 text-[#FF7A00]" />
-                <span className="hidden sm:inline">Export CSV</span>
+                <Bell className="w-4 h-4" />
+                {(analytics.statusCounts.pending > 0 || analytics.unrecoveredCount > 0) && (
+                  <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#FF7900] ring-2 ring-white" />
+                )}
               </button>
-            )}
 
-            <button
-              onClick={onBackToStore}
-              className="px-3.5 py-2 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap min-h-[40px]"
-            >
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              <span>Storefront</span>
-            </button>
+              {bellOpen && (
+                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 space-y-2 z-40 animate-admin-scale-in text-xs">
+                  <div className="font-bold text-[#071B35] px-1">Live Operations Alerts</div>
+                  <button
+                    onClick={() => {
+                      handleSelectOrdersSubView('pending');
+                      setBellOpen(false);
+                    }}
+                    className="w-full text-left p-2.5 rounded-xl bg-amber-50 hover:bg-amber-100/80 border border-amber-200/80 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-amber-900 font-medium">Needs Proof Review</span>
+                    <span className="font-mono font-bold text-amber-800">{analytics.statusCounts.pending}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveSection('dispatch');
+                      setBellOpen(false);
+                    }}
+                    className="w-full text-left p-2.5 rounded-xl bg-sky-50 hover:bg-sky-100/80 border border-sky-200/80 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-sky-900 font-medium">Awaiting Delhivery AWB</span>
+                    <span className="font-mono font-bold text-sky-800">{readyToShipOrders.length}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveSection('marketing');
+                      setBellOpen(false);
+                    }}
+                    className="w-full text-left p-2.5 rounded-xl bg-orange-50 hover:bg-orange-100/80 border border-orange-200/80 flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="text-orange-900 font-medium">Abandoned Cart Leads</span>
+                    <span className="font-mono font-bold text-orange-800">{analytics.unrecoveredCount}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Help Popover */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setHelpOpen((v) => !v);
+                  setBellOpen(false);
+                  setProfileOpen(false);
+                }}
+                className="p-2.5 rounded-xl text-slate-600 hover:text-[#071B35] hover:bg-slate-100 transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+                title="Admin Quick Guide"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+
+              {helpOpen && (
+                <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl p-4 space-y-2.5 z-40 animate-admin-scale-in text-xs">
+                  <div className="font-bold text-[#071B35]">Admin Quick Guide</div>
+                  <div className="text-slate-600 space-y-1.5 leading-relaxed">
+                    <p>• Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-[10px]">Ctrl+K</kbd> anytime to search Order IDs, Phones, or AWBs.</p>
+                    <p>• Click any <strong className="text-[#FF7900]">#Order ID</strong> or Eye button to inspect raw logos, mockups &amp; shipping address.</p>
+                    <p>• Use <strong className="text-[#071B35]">Book Delivery</strong> to manifest prepaid shipments via Delhivery One.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Admin Profile Dropdown */}
+            <div className="relative pl-1 border-l border-slate-200">
+              <button
+                onClick={() => {
+                  setProfileOpen((v) => !v);
+                  setBellOpen(false);
+                  setHelpOpen(false);
+                }}
+                className="flex items-center gap-2.5 py-1 px-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-full bg-[#FF7900] text-white font-display font-bold text-xs flex items-center justify-center shadow-sm">
+                  TW
+                </div>
+                <div className="hidden sm:block text-left leading-tight">
+                  <div className="text-xs font-bold text-[#071B35]">Teqqno Admin</div>
+                  <div className="text-[10px] text-slate-500">Super Admin</div>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+              </button>
+
+              {profileOpen && (
+                <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 space-y-1 z-40 animate-admin-scale-in text-xs">
+                  <div className="px-3 py-2 border-b border-slate-100">
+                    <div className="font-bold text-[#071B35]">TeqqnoWorld Operations</div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      DB: {isSupabaseConfigured() ? 'Supabase Connected' : 'Local'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={onBackToStore}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 text-[#071B35] font-medium flex items-center gap-2 cursor-pointer"
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5 text-[#FF7900]" />
+                    <span>Open Customer Store</span>
+                  </button>
+                  <button
+                    onClick={handleLock}
+                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-50 text-red-600 font-medium flex items-center gap-2 cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Lock Admin Hub</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
-        {/* Mobile/Tablet Scrollable Tab Strip (below header on < lg) */}
-        <div className="lg:hidden border-b border-white/[0.08] bg-[#121318] px-3 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 min-h-[40px] ${
-                  isActive ? 'bg-[#FF7A00] text-white font-semibold' : 'text-zinc-300 hover:bg-white/[0.05]'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5 shrink-0" />
-                <span>{item.shortLabel}</span>
-                {typeof item.badge === 'number' && (
-                  <span className="font-mono tabular-nums text-[10px] opacity-90">({item.badge})</span>
-                )}
-              </button>
-            );
-          })}
+        {/* Mobile Quick Section Strip (< lg) */}
+        <div className="lg:hidden bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar z-10">
+          {(
+            [
+              { id: 'dashboard', label: 'Dashboard' },
+              { id: 'orders', label: `Orders (${orders.length})` },
+              { id: 'dispatch', label: `Dispatch (${readyToShipOrders.length})` },
+              { id: 'products', label: 'Products' },
+              { id: 'customers', label: 'Customers' },
+              { id: 'marketing', label: 'Marketing' },
+              { id: 'analytics', label: 'Analytics' },
+              { id: 'integrations', label: 'Setup' },
+            ] as Array<{ id: AdminSection; label: string }>
+          ).map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActiveSection(item.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer min-h-[36px] transition-colors ${
+                activeSection === item.id
+                  ? 'bg-[#FF7900] text-white'
+                  : 'bg-slate-100 text-slate-600 hover:text-[#071B35]'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
 
-        {/* Workspace Container */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-          {/* ================================================================= */}
-          {/* TAB 1: ORDERS QUEUE */}
-          {/* ================================================================= */}
-          {activeTab === 'orders' && (
-            <div className="space-y-6">
-              {/* 4 Clean Summary Metrics */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5">
-                  <div className="text-xs text-zinc-400">Total Custom Orders</div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-white font-mono tabular-nums mt-1">
-                    {orders.length}
-                  </div>
-                  <div className="text-xs text-emerald-400 font-mono tabular-nums mt-1">
-                    ₹{analytics.totalRevenue.toLocaleString('en-IN')} est. value
-                  </div>
+        {/* MAIN PAGE CONTAINER */}
+        <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 relative z-10">
+          {/* Page Breadcrumb & Title Banner */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <button
+                  onClick={() => setActiveSection('dashboard')}
+                  className="hover:text-[#FF7900] cursor-pointer"
+                >
+                  Operations
+                </button>
+                <span aria-hidden="true">»</span>
+                <span className="font-semibold text-[#071B35]">{currentMeta.breadcrumb}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#FF7900] text-white flex items-center justify-center shadow-md shadow-[#FF7900]/20 shrink-0">
+                  <HeaderIcon className="w-5 h-5" />
                 </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5">
-                  <div className="text-xs text-zinc-400">Needs Proof Review</div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-amber-400 font-mono tabular-nums mt-1">
-                    {analytics.statusCounts.pending}
-                  </div>
-                  <div className="text-xs text-zinc-500 mt-1">Awaiting verification</div>
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5">
-                  <div className="text-xs text-zinc-400">Approved &amp; Printing</div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-sky-400 font-mono tabular-nums mt-1">
-                    {analytics.statusCounts.approved + analytics.statusCounts['in-production']}
-                  </div>
-                  <div className="text-xs text-zinc-500 mt-1">Active production queue</div>
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5">
-                  <div className="text-xs text-zinc-400">Shipped &amp; Delivered</div>
-                  <div className="text-2xl sm:text-3xl font-display font-bold text-emerald-400 font-mono tabular-nums mt-1">
-                    {analytics.statusCounts.dispatched + analytics.statusCounts.delivered}
-                  </div>
-                  <div className="text-xs text-zinc-500 mt-1">Delhivery AWBs assigned</div>
+                <div>
+                  <h1 className="font-display font-bold text-xl sm:text-2xl tracking-tight text-[#071B35]">
+                    {currentMeta.title}
+                  </h1>
+                  <p className="text-xs text-slate-500">{currentMeta.subtitle}</p>
                 </div>
               </div>
+            </div>
 
-              {/* Search, Status Filter Tabs, and View Switcher */}
-              <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-3 sm:p-4 space-y-3">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="Search by Order Ref, Customer, Phone, Email, Company, or AWB..."
-                      value={orderSearchQuery}
-                      onChange={(e) => setOrderSearchQuery(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2.5 bg-[#0A0B0E] border border-white/[0.1] rounded-xl text-xs text-white placeholder:text-zinc-500 focus:border-[#FF7A00] outline-none min-h-[42px]"
-                    />
-                  </div>
+            {/* Right Action Buttons: Refresh, Export CSV, + Create Order */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={loadData}
+                disabled={loadingOrders || loadingLeads}
+                className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-[#071B35] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-2xs transition-all min-h-[40px]"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    loadingOrders || loadingLeads ? 'animate-spin text-[#FF7900]' : 'text-slate-500'
+                  }`}
+                />
+                <span>Refresh</span>
+              </button>
 
-                  {/* Desktop View Switcher */}
-                  <div className="hidden md:flex items-center gap-1 p-1 bg-[#0A0B0E] border border-white/[0.08] rounded-xl shrink-0">
-                    <button
-                      onClick={() => setOrdersViewMode('table')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors ${
-                        ordersViewMode === 'table'
-                          ? 'bg-white/[0.1] text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      <List className="w-3.5 h-3.5" />
-                      <span>Table</span>
-                    </button>
-                    <button
-                      onClick={() => setOrdersViewMode('cards')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors ${
-                        ordersViewMode === 'cards'
-                          ? 'bg-white/[0.1] text-white'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      <LayoutGrid className="w-3.5 h-3.5" />
-                      <span>Cards</span>
-                    </button>
-                  </div>
-                </div>
+              <button
+                onClick={handleExportOrdersCsv}
+                className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-[#071B35] flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all min-h-[40px]"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-500" />
+                <span>Export CSV</span>
+              </button>
 
-                {/* Clickable Status Filter Bar */}
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
-                  {(
-                    [
-                      { id: 'all', label: 'All Orders', count: orders.length },
-                      { id: 'pending', label: 'Pending', count: analytics.statusCounts.pending },
-                      { id: 'approved', label: 'Approved', count: analytics.statusCounts.approved },
-                      { id: 'in-production', label: 'In Production', count: analytics.statusCounts['in-production'] },
-                      { id: 'dispatched', label: 'Dispatched', count: analytics.statusCounts.dispatched },
-                      { id: 'delivered', label: 'Delivered', count: analytics.statusCounts.delivered },
-                    ] as const
-                  ).map((st) => (
-                    <button
-                      key={st.id}
-                      onClick={() => setStatusFilter(st.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors min-h-[36px] ${
-                        statusFilter === st.id
-                          ? 'bg-[#FF7A00] text-white font-semibold'
-                          : 'bg-[#0A0B0E] text-zinc-400 hover:text-white border border-white/[0.06]'
-                      }`}
-                    >
-                      {st.label}{' '}
-                      <span className="font-mono tabular-nums opacity-80">({st.count})</span>
-                    </button>
-                  ))}
-                </div>
+              <button
+                onClick={() => setCreateOrderOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-md shadow-[#FF7900]/25 transition-all active:scale-[0.98] min-h-[40px]"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Order</span>
+              </button>
+            </div>
+          </div>
+
+          {/* ================================================================= */}
+          {/* SECTION RENDERER */}
+          {/* ================================================================= */}
+          {activeSection === 'dashboard' && (
+            <DashboardOverviewView
+              orders={orders}
+              abandonedLeads={abandonedLeads}
+              analytics={analytics}
+              onNavigateSection={(sec) => setActiveSection(sec)}
+              onFilterOrdersStatus={(st) => handleSelectOrdersSubView(st === 'all' ? 'all' : st)}
+              onInspectOrder={(o) => setInspectingOrder(o)}
+              onOpenCreateOrder={() => setCreateOrderOpen(true)}
+            />
+          )}
+
+          {activeSection === 'orders' && (
+            <div className="space-y-5 animate-admin-fade-up">
+              {/* 4 Pastel Animated KPI Cards (Matching Reference) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <AdminKpiCard
+                  title="Total Custom Orders"
+                  value={orders.length}
+                  subtext={
+                    <span className="text-emerald-600 font-semibold font-mono tabular-nums">
+                      ₹{analytics.totalRevenue.toLocaleString('en-IN')} est. value
+                    </span>
+                  }
+                  icon={ShoppingCart}
+                  tone="orange"
+                  sparklinePoints={sparkTotal}
+                  sparkId="ord-total"
+                  onClick={() => handleSelectOrdersSubView('all')}
+                  delayMs={0}
+                />
+                <AdminKpiCard
+                  title="Needs Proof Review"
+                  value={analytics.statusCounts.pending}
+                  subtext="Awaiting verification"
+                  icon={Clock}
+                  tone="blue"
+                  sparklinePoints={sparkPending}
+                  sparkId="ord-pending"
+                  onClick={() => handleSelectOrdersSubView('pending')}
+                  delayMs={50}
+                />
+                <AdminKpiCard
+                  title="Approved & Printing"
+                  value={analytics.statusCounts.approved + analytics.statusCounts['in-production']}
+                  subtext="Active production queue"
+                  icon={Printer}
+                  tone="violet"
+                  sparklinePoints={sparkProd}
+                  sparkId="ord-prod"
+                  onClick={() => handleSelectOrdersSubView('in-production')}
+                  delayMs={100}
+                />
+                <AdminKpiCard
+                  title="Shipped & Delivered"
+                  value={analytics.statusCounts.dispatched + analytics.statusCounts.delivered}
+                  subtext="Delivery AWBs assigned"
+                  icon={Truck}
+                  tone="green"
+                  sparklinePoints={sparkShip}
+                  sparkId="ord-ship"
+                  onClick={() => handleSelectOrdersSubView('dispatched')}
+                  delayMs={150}
+                />
               </div>
 
-              {/* Orders Loading / Empty / Data */}
-              {loadingOrders ? (
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-3">
-                  {[1, 2, 3, 4].map((n) => (
-                    <div key={n} className="h-14 rounded-xl bg-white/[0.04] animate-pulse" />
-                  ))}
-                </div>
-              ) : filteredOrders.length === 0 ? (
-                <div className="text-center py-16 bg-[#121318] rounded-2xl border border-white/[0.08] space-y-3">
-                  <Package className="w-10 h-10 text-zinc-600 mx-auto" />
-                  <h3 className="font-semibold text-white text-base">No matching orders</h3>
-                  <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                    {orderSearchQuery || statusFilter !== 'all'
-                      ? 'Clear your search or status filter to view all orders.'
-                      : 'Custom orders placed on your storefront will appear here automatically.'}
-                  </p>
-                  {(orderSearchQuery || statusFilter !== 'all') && (
-                    <button
-                      onClick={() => {
-                        setOrderSearchQuery('');
-                        setStatusFilter('all');
-                      }}
-                      className="px-4 py-2 rounded-xl bg-[#FF7A00] text-white text-xs font-semibold cursor-pointer"
-                    >
-                      Reset Filters
-                    </button>
+              {/* White Orders Queue Container */}
+              <div className="bg-white border border-slate-200/80 rounded-2xl shadow-[0_2px_14px_-4px_rgba(7,27,53,0.06)] overflow-visible">
+                {/* Search Bar + Table/Cards Toggle + Status Tabs + Filters */}
+                <div className="p-4 border-b border-slate-100 space-y-3">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search by Order ID, Customer, Phone, Email, Product, AWB..."
+                        value={orderSearchQuery}
+                        onChange={(e) => setOrderSearchQuery(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-[#071B35] placeholder:text-slate-400 focus:border-[#FF7900] focus:bg-white outline-none transition-colors min-h-[40px]"
+                      />
+                    </div>
+
+                    {/* Desktop/Tablet View Switcher */}
+                    <div className="hidden md:flex items-center gap-1 p-1 bg-slate-100 rounded-xl shrink-0">
+                      <button
+                        onClick={() => setOrdersViewMode('table')}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all ${
+                          ordersViewMode === 'table'
+                            ? 'bg-[#FF7900] text-white shadow-xs'
+                            : 'text-slate-600 hover:text-[#071B35]'
+                        }`}
+                      >
+                        <List className="w-3.5 h-3.5" />
+                        <span>Table</span>
+                      </button>
+                      <button
+                        onClick={() => setOrdersViewMode('cards')}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all ${
+                          ordersViewMode === 'cards'
+                            ? 'bg-[#FF7900] text-white shadow-xs'
+                            : 'text-slate-600 hover:text-[#071B35]'
+                        }`}
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Cards</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Clickable Status Filter Tabs + Filters Button */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                      {(
+                        [
+                          { id: 'all', label: 'All Orders', count: orders.length },
+                          { id: 'pending', label: 'Pending', count: analytics.statusCounts.pending },
+                          { id: 'approved', label: 'Approved', count: analytics.statusCounts.approved },
+                          { id: 'in-production', label: 'In Production', count: analytics.statusCounts['in-production'] },
+                          { id: 'dispatched', label: 'Dispatched', count: analytics.statusCounts.dispatched },
+                          { id: 'delivered', label: 'Delivered', count: analytics.statusCounts.delivered },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          onClick={() => {
+                            setStatusFilter(st.id);
+                            setOrdersSubMode(st.id === 'all' ? 'queue' : st.id);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer transition-all min-h-[34px] ${
+                            statusFilter === st.id
+                              ? 'bg-[#FF7900] text-white font-semibold shadow-xs'
+                              : 'bg-white text-slate-600 hover:text-[#071B35] border border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          {st.label}{' '}
+                          <span className="font-mono tabular-nums opacity-85">({st.count})</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Filters Dropdown Popover */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setFiltersOpen((v) => !v)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors min-h-[34px] ${
+                          paymentFilter !== 'all' || sortBy !== 'newest'
+                            ? 'bg-orange-50 border-[#FF7900] text-[#FF7900]'
+                            : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                        }`}
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        <span>Filters</span>
+                      </button>
+
+                      {filtersOpen && (
+                        <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-4 space-y-3 z-40 animate-admin-scale-in text-xs">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Payment Status
+                            </label>
+                            <select
+                              value={paymentFilter}
+                              onChange={(e) => setPaymentFilter(e.target.value as any)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-[#071B35] outline-none focus:border-[#FF7900]"
+                            >
+                              <option value="all">All Payment Plans</option>
+                              <option value="paid">Full Paid (100%)</option>
+                              <option value="partial">Partial (50% Advance)</option>
+                              <option value="pending">Pending / Review</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Sort Order
+                            </label>
+                            <select
+                              value={sortBy}
+                              onChange={(e) => setSortBy(e.target.value as any)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-[#071B35] outline-none focus:border-[#FF7900]"
+                            >
+                              <option value="newest">Newest First</option>
+                              <option value="oldest">Oldest First</option>
+                              <option value="highest">Highest Order Value</option>
+                            </select>
+                          </div>
+                          <div className="pt-1 flex justify-between items-center">
+                            <button
+                              onClick={() => {
+                                setPaymentFilter('all');
+                                setSortBy('newest');
+                                setFiltersOpen(false);
+                              }}
+                              className="text-slate-500 hover:text-[#071B35] font-medium cursor-pointer"
+                            >
+                              Reset
+                            </button>
+                            <button
+                              onClick={() => setFiltersOpen(false)}
+                              className="px-3 py-1.5 rounded-lg bg-[#071B35] text-white font-semibold cursor-pointer"
+                            >
+                              Apply
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Batch Selection Toolbar */}
+                  {selectedOrderIds.length > 0 && (
+                    <div className="p-2.5 rounded-xl bg-orange-50 border border-orange-200 flex flex-wrap items-center justify-between gap-2 text-xs animate-admin-fade-up">
+                      <span className="font-semibold text-[#071B35]">
+                        {selectedOrderIds.length} orders selected
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() =>
+                            exportOrdersListToCsv(
+                              orders.filter((o) => selectedOrderIds.includes(o.id))
+                            )
+                          }
+                          className="px-3 py-1 rounded-lg bg-[#FF7900] text-white font-semibold cursor-pointer"
+                        >
+                          Export Selected CSV
+                        </button>
+                        <button
+                          onClick={() => setSelectedOrderIds([])}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 hover:text-[#071B35] cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
-              ) : (
-                <>
-                  {/* DESKTOP HIGH-DENSITY SCANNABLE TABLE */}
-                  {ordersViewMode === 'table' && (
-                    <div className="hidden md:block bg-[#121318] border border-white/[0.08] rounded-2xl overflow-hidden">
-                      <div className="overflow-x-auto">
+
+                {/* Orders Body: Skeleton / Empty / Table / Cards */}
+                {loadingOrders ? (
+                  <div className="p-5 space-y-3">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <div key={n} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
+                    ))}
+                  </div>
+                ) : filteredOrders.length === 0 ? (
+                  <div className="text-center py-16 px-4 space-y-3">
+                    <Package className="w-10 h-10 text-slate-300 mx-auto" />
+                    <h3 className="font-semibold text-[#071B35] text-base">No matching orders</h3>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      {orderSearchQuery || statusFilter !== 'all' || paymentFilter !== 'all'
+                        ? 'Clear your search or filter selections to view all orders.'
+                        : 'Custom orders placed on your storefront will appear here automatically.'}
+                    </p>
+                    {(orderSearchQuery || statusFilter !== 'all' || paymentFilter !== 'all') && (
+                      <button
+                        onClick={() => {
+                          setOrderSearchQuery('');
+                          setStatusFilter('all');
+                          setPaymentFilter('all');
+                          setOrdersSubMode('queue');
+                        }}
+                        className="px-4 py-2 rounded-xl bg-[#FF7900] text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Reset Filters
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {/* DESKTOP TABLE VIEW */}
+                    {ordersViewMode === 'table' && (
+                      <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
-                            <tr className="border-b border-white/[0.08] bg-white/[0.02] text-[11px] font-medium text-zinc-400">
-                              <th className="py-3.5 px-4">Order &amp; Date</th>
-                              <th className="py-3.5 px-4">Customer</th>
-                              <th className="py-3.5 px-4">Artwork &amp; Specs</th>
-                              <th className="py-3.5 px-4 text-right">Amount &amp; Payment</th>
-                              <th className="py-3.5 px-4">Stage</th>
-                              <th className="py-3.5 px-4">Delhivery / Courier</th>
-                              <th className="py-3.5 px-4 text-right">Actions</th>
+                            <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold text-slate-600">
+                              <th className="py-3 pl-4 pr-2 w-9">
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    paginatedOrders.length > 0 &&
+                                    paginatedOrders.every((o) => selectedOrderIds.includes(o.id))
+                                  }
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedOrderIds((prev) =>
+                                        Array.from(
+                                          new Set([...prev, ...paginatedOrders.map((o) => o.id)])
+                                        )
+                                      );
+                                    } else {
+                                      const pageSet = new Set(paginatedOrders.map((o) => o.id));
+                                      setSelectedOrderIds((prev) =>
+                                        prev.filter((id) => !pageSet.has(id))
+                                      );
+                                    }
+                                  }}
+                                  className="rounded border-slate-300 text-[#FF7900] focus:ring-[#FF7900] cursor-pointer"
+                                  aria-label="Select all orders on page"
+                                />
+                              </th>
+                              <th className="py-3 px-3">Order ID &amp; Date</th>
+                              <th className="py-3 px-3">Customer</th>
+                              <th className="py-3 px-3">Artwork &amp; Product</th>
+                              <th className="py-3 px-3">Amount &amp; Payment</th>
+                              <th className="py-3 px-3">Stage</th>
+                              <th className="py-3 px-3">Delivery / Courier</th>
+                              <th className="py-3 pl-3 pr-4 text-right">Actions</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-white/[0.06]">
-                            {filteredOrders.map((order) => {
+                          <tbody className="divide-y divide-slate-100">
+                            {paginatedOrders.map((order) => {
                               const { product, total } = getOrderEstimates(order);
                               const parsed = parseOrderNotes(order.custom_notes);
+                              const thumb = getOrderThumbnail(order, parsed);
+                              const payBadge = getPaymentBadge(parsed, total);
                               const hasRealAwb =
                                 Boolean(order.tracking_number) &&
                                 !order.tracking_number!.toLowerCase().includes('awaiting');
+                              const isChecked = selectedOrderIds.includes(order.id);
 
                               return (
                                 <tr
                                   key={order.id}
-                                  className="hover:bg-white/[0.025] transition-colors group"
+                                  className={`hover:bg-slate-50/90 transition-colors ${
+                                    isChecked ? 'bg-orange-50/40' : ''
+                                  }`}
                                 >
-                                  <td className="py-3.5 px-4 align-top whitespace-nowrap">
+                                  <td className="py-3.5 pl-4 pr-2 align-middle">
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedOrderIds((prev) => [...prev, order.id]);
+                                        } else {
+                                          setSelectedOrderIds((prev) =>
+                                            prev.filter((id) => id !== order.id)
+                                          );
+                                        }
+                                      }}
+                                      className="rounded border-slate-300 text-[#FF7900] focus:ring-[#FF7900] cursor-pointer"
+                                      aria-label={`Select ${formatOrderRef(order.id)}`}
+                                    />
+                                  </td>
+
+                                  <td className="py-3.5 px-3 align-middle whitespace-nowrap">
                                     <button
                                       onClick={() => setInspectingOrder(order)}
-                                      className="font-mono font-bold text-[#FF7A00] hover:underline cursor-pointer block"
+                                      className="font-mono font-bold text-[#FF7900] hover:underline cursor-pointer block"
                                     >
                                       #{formatOrderRef(order.id)}
                                     </button>
-                                    <div className="text-[11px] text-zinc-400 font-mono tabular-nums mt-0.5">
+                                    <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
                                       {new Date(order.created_at).toLocaleDateString('en-IN', {
                                         day: '2-digit',
                                         month: 'short',
@@ -1386,71 +2013,50 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                     </div>
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top max-w-[200px]">
-                                    <div className="font-semibold text-white truncate">
+                                  <td className="py-3.5 px-3 align-middle max-w-[180px]">
+                                    <div className="font-semibold text-[#071B35] truncate">
                                       {order.customer_name}
                                     </div>
+                                    <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
+                                      {order.phone}
+                                    </div>
                                     {order.company && (
-                                      <div className="text-[11px] text-zinc-400 truncate">
+                                      <div className="text-[10px] text-slate-400 truncate">
                                         {order.company}
                                       </div>
                                     )}
-                                    <div className="text-[11px] text-zinc-400 font-mono tabular-nums mt-0.5">
-                                      {order.phone}
-                                    </div>
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top">
-                                    <div className="flex items-start gap-2.5">
-                                      <div className="flex items-center gap-1 shrink-0">
-                                        {order.logo_url ? (
-                                          <button
-                                            onClick={() => setPreviewLogoUrl(order.logo_url)}
-                                            className="w-10 h-10 rounded-lg border border-white/[0.12] bg-zinc-900 p-0.5 overflow-hidden cursor-zoom-in"
-                                            title="Inspect customer logo"
-                                          >
-                                            <img
-                                              src={order.logo_url}
-                                              alt="Logo"
-                                              className="w-full h-full object-contain"
-                                            />
-                                          </button>
-                                        ) : (
-                                          <div className="w-10 h-10 rounded-lg border border-white/[0.08] bg-[#0A0B0E] flex items-center justify-center text-[10px] text-zinc-500">
-                                            Logo
-                                          </div>
-                                        )}
-                                        {parsed.frontMockupUrl && (
-                                          <button
-                                            onClick={() => setPreviewLogoUrl(parsed.frontMockupUrl)}
-                                            className="w-10 h-10 rounded-lg border border-[#FF7A00]/40 bg-slate-100 p-0.5 overflow-hidden cursor-zoom-in"
-                                            title="Inspect placed mockup"
-                                          >
-                                            <img
-                                              src={parsed.frontMockupUrl}
-                                              alt="Mockup"
-                                              className="w-full h-full object-contain"
-                                            />
-                                          </button>
-                                        )}
-                                      </div>
-                                      <div className="min-w-0 max-w-[240px]">
-                                        <div className="font-semibold text-zinc-100 truncate">
+                                  <td className="py-3.5 px-3 align-middle">
+                                    <div className="flex items-center gap-3">
+                                      <OrderThumb
+                                        src={thumb}
+                                        alt={product?.name || 'Product'}
+                                        onClick={
+                                          parsed.frontMockupUrl || order.logo_url
+                                            ? () =>
+                                                setPreviewLogoUrl(
+                                                  parsed.frontMockupUrl || order.logo_url!
+                                                )
+                                            : undefined
+                                        }
+                                      />
+                                      <div className="min-w-0 max-w-[230px]">
+                                        <div className="font-semibold text-[#071B35] truncate">
                                           {product?.name || order.product_id || 'Custom Product'}
                                         </div>
-                                        <div className="text-[11px] text-zinc-400 mt-0.5">
-                                          <span className="font-mono tabular-nums font-semibold text-zinc-200">
+                                        <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                                          <span className="font-mono font-semibold text-slate-700">
                                             {order.quantity} pcs
                                           </span>
                                           {parsed.color && <span> · {parsed.color}</span>}
-                                          {parsed.size && <span> · {parsed.size}</span>}
                                           {parsed.method && <span> · {parsed.method}</span>}
                                         </div>
-                                        {parsed.parsedAddress.city && (
-                                          <div className="text-[11px] text-zinc-500 truncate mt-0.5">
+                                        {(parsed.parsedAddress.city || parsed.parsedAddress.pincode) && (
+                                          <div className="text-[11px] text-slate-400 truncate">
                                             {parsed.parsedAddress.city}
                                             {parsed.parsedAddress.pincode
-                                              ? ` - ${parsed.parsedAddress.pincode}`
+                                              ? ` – ${parsed.parsedAddress.pincode}`
                                               : ''}
                                           </div>
                                         )}
@@ -1458,58 +2064,68 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                     </div>
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top text-right whitespace-nowrap font-mono tabular-nums">
-                                    <div className="font-bold text-white">
+                                  <td className="py-3.5 px-3 align-middle whitespace-nowrap font-mono tabular-nums">
+                                    <div className="font-bold text-[#071B35]">
                                       ₹{total.toLocaleString('en-IN')}
                                     </div>
-                                    {parsed.paidAmount && (
-                                      <div className="text-[11px] text-emerald-400 mt-0.5">
-                                        Paid ₹{parsed.paidAmount}
-                                      </div>
-                                    )}
-                                    {parsed.balanceDue && parsed.balanceDue !== '0' && (
-                                      <div className="text-[11px] text-amber-400">
-                                        Due ₹{parsed.balanceDue}
-                                      </div>
-                                    )}
+                                    <div className="mt-1">
+                                      <span
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-sans font-semibold border ${
+                                          payBadge.kind === 'paid'
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                            : payBadge.kind === 'partial'
+                                            ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                                        }`}
+                                      >
+                                        {payBadge.label}
+                                      </span>
+                                    </div>
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top whitespace-nowrap">
-                                    <select
-                                      value={order.status}
-                                      disabled={updatingOrderId === order.id}
-                                      onChange={(e) =>
-                                        handleStatusChange(order.id, e.target.value as OrderStatus)
-                                      }
-                                      className={`text-xs font-semibold py-1.5 px-2.5 rounded-lg border outline-none cursor-pointer ${STATUS_META[order.status].colorClass}`}
-                                    >
-                                      <option value="pending">Pending</option>
-                                      <option value="approved">Approved</option>
-                                      <option value="in-production">In Production</option>
-                                      <option value="dispatched">Dispatched</option>
-                                      <option value="delivered">Delivered</option>
-                                    </select>
+                                  <td className="py-3.5 px-3 align-middle whitespace-nowrap">
+                                    <div className="inline-flex items-center gap-1.5 relative">
+                                      <span
+                                        className={`w-2 h-2 rounded-full shrink-0 ${STATUS_META[order.status].dotClass}`}
+                                      />
+                                      <select
+                                        value={order.status}
+                                        disabled={updatingOrderId === order.id}
+                                        onChange={(e) =>
+                                          handleStatusChange(order.id, e.target.value as OrderStatus)
+                                        }
+                                        className={`text-xs font-semibold py-1.5 px-2.5 rounded-xl border outline-none cursor-pointer transition-colors ${STATUS_META[order.status].pillClass}`}
+                                      >
+                                        <option value="pending">Pending</option>
+                                        <option value="approved">Approved</option>
+                                        <option value="in-production">In Production</option>
+                                        <option value="dispatched">Dispatched</option>
+                                        <option value="delivered">Delivered</option>
+                                      </select>
+                                    </div>
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top whitespace-nowrap">
+                                  <td className="py-3.5 px-3 align-middle whitespace-nowrap">
                                     {hasRealAwb ? (
-                                      <div className="space-y-1">
-                                        <div className="font-mono text-zinc-200 font-semibold">
+                                      <div className="space-y-0.5">
+                                        <div className="font-mono text-[#071B35] font-semibold">
                                           {order.tracking_number}
                                         </div>
                                         <div className="flex items-center gap-2 text-[11px]">
                                           <button
-                                            onClick={() => handleTrackDelhiveryOrder(order.tracking_number!)}
-                                            className="text-amber-400 hover:underline cursor-pointer"
+                                            onClick={() =>
+                                              handleTrackDelhiveryOrder(order.tracking_number!)
+                                            }
+                                            className="text-[#FF7900] font-semibold hover:underline cursor-pointer"
                                           >
                                             Track
                                           </button>
-                                          <span className="text-zinc-600">·</span>
+                                          <span className="text-slate-300">·</span>
                                           <a
                                             href={getDelhiveryLabelUrl(order.tracking_number!)}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="text-emerald-400 hover:underline"
+                                            className="text-emerald-700 font-semibold hover:underline"
                                           >
                                             Label
                                           </a>
@@ -1518,19 +2134,20 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                     ) : (
                                       <button
                                         onClick={() => openDispatchModalForOrder(order)}
-                                        className="px-2.5 py-1.5 rounded-lg bg-[#FF7A00]/15 hover:bg-[#FF7A00]/25 text-[#FF7A00] border border-[#FF7A00]/30 text-[11px] font-semibold cursor-pointer"
+                                        className="px-3 py-1.5 rounded-xl bg-white hover:bg-[#FF7900] text-[#FF7900] hover:text-white border border-[#FF7900] text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
                                       >
-                                        Book Delhivery
+                                        <Truck className="w-3.5 h-3.5" />
+                                        <span>Book Delivery</span>
                                       </button>
                                     )}
                                   </td>
 
-                                  <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
-                                    <div className="inline-flex items-center gap-1">
+                                  <td className="py-3.5 pl-3 pr-4 align-middle text-right whitespace-nowrap">
+                                    <div className="inline-flex items-center gap-1.5 relative">
                                       <button
                                         onClick={() => setInspectingOrder(order)}
-                                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-[#FF7A00] text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                        title="Open full order inspector"
+                                        className="w-8 h-8 rounded-full bg-slate-100 hover:bg-[#071B35] text-slate-600 hover:text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+                                        title="Inspect order details & artwork"
                                       >
                                         <Eye className="w-3.5 h-3.5" />
                                       </button>
@@ -1546,18 +2163,60 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                         })}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="p-2 rounded-lg bg-[#1EBE5D]/15 hover:bg-[#1EBE5D] text-[#1EBE5D] hover:text-white transition-colors"
+                                        className="w-8 h-8 rounded-full bg-[#1EBE5D] hover:bg-[#19a851] text-white inline-flex items-center justify-center transition-colors shadow-2xs"
                                         title="WhatsApp client"
                                       >
-                                        <WhatsAppIcon className="w-3.5 h-3.5" />
+                                        <WhatsAppIcon className="w-3.5 h-3.5 text-white" />
                                       </a>
                                       <button
-                                        onClick={() => generateAdminOrderInvoicePdf(order, PRODUCTS)}
-                                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.12] text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                        title="Download Tax Invoice PDF"
+                                        onClick={() =>
+                                          setOpenRowMenuId((prev) =>
+                                            prev === order.id ? null : order.id
+                                          )
+                                        }
+                                        className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 inline-flex items-center justify-center transition-colors cursor-pointer"
+                                        title="More order actions"
                                       >
-                                        <Receipt className="w-3.5 h-3.5" />
+                                        <MoreHorizontal className="w-4 h-4" />
                                       </button>
+
+                                      {openRowMenuId === order.id && (
+                                        <div className="absolute right-0 top-10 w-48 bg-white border border-slate-200 rounded-xl shadow-xl p-1.5 space-y-0.5 z-40 animate-admin-scale-in text-left">
+                                          <button
+                                            onClick={() => {
+                                              setOpenRowMenuId(null);
+                                              handleSendOrderConfirmationEmail(order);
+                                            }}
+                                            disabled={sendingEmailOrderId === order.id}
+                                            className="w-full px-2.5 py-2 rounded-lg hover:bg-slate-100 text-[#071B35] text-xs font-medium flex items-center gap-2 cursor-pointer"
+                                          >
+                                            <Mail className="w-3.5 h-3.5 text-[#FF7900]" />
+                                            <span>Send Hostinger Email</span>
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setOpenRowMenuId(null);
+                                              generateAdminOrderInvoicePdf(order, PRODUCTS);
+                                            }}
+                                            className="w-full px-2.5 py-2 rounded-lg hover:bg-slate-100 text-[#071B35] text-xs font-medium flex items-center gap-2 cursor-pointer"
+                                          >
+                                            <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                                            <span>Download Invoice PDF</span>
+                                          </button>
+                                          {onNavigateToOrderTracking && (
+                                            <button
+                                              onClick={() => {
+                                                setOpenRowMenuId(null);
+                                                onNavigateToOrderTracking(formatOrderRef(order.id));
+                                              }}
+                                              className="w-full px-2.5 py-2 rounded-lg hover:bg-slate-100 text-[#071B35] text-xs font-medium flex items-center gap-2 cursor-pointer"
+                                            >
+                                              <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+                                              <span>Customer View</span>
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
                                 </tr>
@@ -1566,1169 +2225,539 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                           </tbody>
                         </table>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* RESPONSIVE CARDS VIEW (Always on Mobile/Tablet, optional on Desktop) */}
-                  <div className={`${ordersViewMode === 'table' ? 'md:hidden' : ''} space-y-4`}>
-                    {filteredOrders.map((order) => {
-                      const { product, unitPrice, total } = getOrderEstimates(order);
-                      const parsed = parseOrderNotes(order.custom_notes);
-                      const hasRealAwb =
-                        Boolean(order.tracking_number) &&
-                        !order.tracking_number!.toLowerCase().includes('awaiting');
-
-                      return (
-                        <div
-                          key={order.id}
-                          className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5 space-y-4"
-                        >
-                          {/* Top Row: Order Ref + Meta + Revenue */}
-                          <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-white/[0.07]">
-                            <div className="space-y-1">
-                              <div className="flex flex-wrap items-center gap-2 text-xs">
-                                <button
-                                  onClick={() => setInspectingOrder(order)}
-                                  className="font-mono font-bold text-[#FF7A00] hover:underline cursor-pointer"
-                                >
-                                  #{formatOrderRef(order.id)}
-                                </button>
-                                <span className="text-zinc-600">·</span>
-                                <span className="text-zinc-400 font-mono tabular-nums">
-                                  {new Date(order.created_at).toLocaleDateString('en-IN', {
-                                    day: '2-digit',
-                                    month: 'short',
-                                    year: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })}
-                                </span>
-                                {order.company && (
-                                  <>
-                                    <span className="text-zinc-600">·</span>
-                                    <span className="text-zinc-300 font-medium">{order.company}</span>
-                                  </>
-                                )}
-                              </div>
-                              <div className="text-sm font-semibold text-white">
-                                {order.customer_name}{' '}
-                                <span className="text-xs font-mono text-zinc-400 font-normal">
-                                  ({order.phone})
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="text-right font-mono tabular-nums">
-                              <div className="text-base font-bold text-white">
-                                ₹{total.toLocaleString('en-IN')}
-                              </div>
-                              {parsed.paidAmount && (
-                                <div className="text-[11px] text-emerald-400">
-                                  Paid ₹{parsed.paidAmount}
-                                  {parsed.balanceDue && parsed.balanceDue !== '0'
-                                    ? ` · Due ₹${parsed.balanceDue}`
-                                    : ''}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Middle Row: Artwork Previews + Parsed Product Specs */}
-                          <div className="flex flex-col sm:flex-row items-start gap-4">
-                            <div className="flex items-center gap-2 shrink-0">
-                              {order.logo_url ? (
-                                <button
-                                  onClick={() => setPreviewLogoUrl(order.logo_url)}
-                                  className="w-16 h-16 rounded-xl border border-white/[0.12] bg-[#0A0B0E] p-1 relative overflow-hidden cursor-zoom-in"
-                                  title="Client Logo"
-                                >
-                                  <img
-                                    src={order.logo_url}
-                                    alt="Client Logo"
-                                    className="w-full h-full object-contain"
-                                  />
-                                  <span className="block text-[9px] font-mono text-zinc-400 text-center">
-                                    Logo
-                                  </span>
-                                </button>
-                              ) : (
-                                <div className="w-16 h-16 rounded-xl border border-white/[0.08] bg-[#0A0B0E] flex items-center justify-center text-[10px] text-zinc-500">
-                                  No Logo
-                                </div>
-                              )}
-                              {parsed.frontMockupUrl && (
-                                <button
-                                  onClick={() => setPreviewLogoUrl(parsed.frontMockupUrl)}
-                                  className="w-16 h-16 rounded-xl border border-[#FF7A00]/40 bg-slate-100 p-1 relative overflow-hidden cursor-zoom-in"
-                                  title="Placed Front Mockup"
-                                >
-                                  <img
-                                    src={parsed.frontMockupUrl}
-                                    alt="Mockup Front"
-                                    className="w-full h-full object-contain"
-                                  />
-                                </button>
-                              )}
-                              {parsed.backMockupUrl && (
-                                <button
-                                  onClick={() => setPreviewLogoUrl(parsed.backMockupUrl)}
-                                  className="w-16 h-16 rounded-xl border border-sky-500/40 bg-slate-100 p-1 relative overflow-hidden cursor-zoom-in"
-                                  title="Placed Back Mockup"
-                                >
-                                  <img
-                                    src={parsed.backMockupUrl}
-                                    alt="Mockup Back"
-                                    className="w-full h-full object-contain"
-                                  />
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="flex-1 min-w-0 space-y-1.5 text-xs">
-                              <div className="font-semibold text-white">
-                                {product?.name || order.product_id || 'Custom Product'}{' '}
-                                <span className="font-mono text-[#FF7A00]">
-                                  · {order.quantity} pcs @ ₹{unitPrice}
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-zinc-400">
-                                {parsed.color && (
-                                  <div>
-                                    Color: <span className="text-zinc-200">{parsed.color}</span>
-                                  </div>
-                                )}
-                                {parsed.size && (
-                                  <div>
-                                    Size: <span className="text-zinc-200">{parsed.size}</span>
-                                  </div>
-                                )}
-                                {parsed.method && (
-                                  <div>
-                                    Method: <span className="text-zinc-200">{parsed.method}</span>
-                                  </div>
-                                )}
-                                {parsed.parsedAddress.city && (
-                                  <div>
-                                    Destination:{' '}
-                                    <span className="text-zinc-200">
-                                      {parsed.parsedAddress.city} {parsed.parsedAddress.pincode}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                              {parsed.placementSummary && (
-                                <div className="text-[11px] text-zinc-400 truncate">
-                                  Layout: <span className="text-zinc-300">{parsed.placementSummary}</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Bottom Row: Controls & Action Bar */}
-                          <div className="pt-3 border-t border-white/[0.07] flex flex-wrap items-center justify-between gap-2.5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <select
-                                value={order.status}
-                                disabled={updatingOrderId === order.id}
-                                onChange={(e) =>
-                                  handleStatusChange(order.id, e.target.value as OrderStatus)
-                                }
-                                className={`text-xs font-semibold py-2 px-3 rounded-xl border outline-none cursor-pointer min-h-[40px] ${STATUS_META[order.status].colorClass}`}
-                              >
-                                <option value="pending">Pending Review</option>
-                                <option value="approved">Proof Approved</option>
-                                <option value="in-production">In Production</option>
-                                <option value="dispatched">Dispatched</option>
-                                <option value="delivered">Delivered</option>
-                              </select>
-
-                              {hasRealAwb ? (
-                                <div className="flex items-center gap-2 text-xs font-mono text-zinc-300 bg-[#0A0B0E] border border-white/[0.08] px-3 py-2 rounded-xl">
-                                  <span>AWB: {order.tracking_number}</span>
-                                  <button
-                                    onClick={() => handleTrackDelhiveryOrder(order.tracking_number!)}
-                                    className="text-amber-400 hover:underline font-sans cursor-pointer"
-                                  >
-                                    Track
-                                  </button>
-                                  <a
-                                    href={getDelhiveryLabelUrl(order.tracking_number!)}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-emerald-400 hover:underline font-sans"
-                                  >
-                                    Label
-                                  </a>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => openDispatchModalForOrder(order)}
-                                  className="px-3.5 py-2 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                                >
-                                  <Truck className="w-3.5 h-3.5" />
-                                  <span>Book Delhivery</span>
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                onClick={() => setInspectingOrder(order)}
-                                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Inspect</span>
-                              </button>
-                              <button
-                                onClick={() => handleSendOrderConfirmationEmail(order)}
-                                disabled={sendingEmailOrderId === order.id}
-                                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                              >
-                                <Mail className="w-3.5 h-3.5 text-[#FF7A00]" />
-                                <span>{sendingEmailOrderId === order.id ? 'Sending...' : 'Email'}</span>
-                              </button>
-                              <button
-                                onClick={() => generateAdminOrderInvoicePdf(order, PRODUCTS)}
-                                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                              >
-                                <Download className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Invoice</span>
-                              </button>
-                              <a
-                                href={getDirectClientWhatsAppUrl({
-                                  phone: order.phone,
-                                  name: order.customer_name,
-                                  type: 'order',
-                                  orderId: formatOrderRef(order.id),
-                                  status: order.status,
-                                  courier: order.courier_partner,
-                                  trackingNumber: order.tracking_number,
-                                })}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-2 rounded-xl bg-[#1EBE5D] hover:bg-[#19a851] text-white text-xs font-semibold flex items-center gap-1.5 min-h-[40px]"
-                              >
-                                <WhatsAppIcon className="w-3.5 h-3.5 text-white" />
-                                <span>WhatsApp</span>
-                              </a>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* ================================================================= */}
-          {/* TAB 2: DELHIVERY & DISPATCH CENTER */}
-          {/* ================================================================= */}
-          {activeTab === 'dispatch' && (
-            <div className="space-y-6">
-              {/* Top Operational Tools Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Pickup Scheduler (6 cols) */}
-                <div className="lg:col-span-6 bg-[#121318] border border-white/[0.08] rounded-2xl p-5 sm:p-6 space-y-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <h2 className="font-display font-semibold text-base text-white">
-                        Schedule Delhivery Pickup
-                      </h2>
-                      <p className="text-xs text-zinc-400 mt-0.5">
-                        Book pickup rider for your Hyderabad fulfillment facilities
-                      </p>
-                    </div>
-                    <span
-                      className={`text-[11px] font-mono font-semibold ${
-                        delhiveryStatus?.configured ? 'text-emerald-400' : 'text-amber-400'
-                      }`}
-                    >
-                      {delhiveryStatus?.configured ? 'API Active' : 'Token Pending'}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <label className="block text-zinc-400 mb-1">Warehouse Facility</label>
-                      <select
-                        value={diagPickupName}
-                        onChange={(e) => setDiagPickupName(e.target.value)}
-                        className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white outline-none focus:border-[#FF7A00]"
-                      >
-                        <option value="Teqqnoworld">Teqqnoworld (Hyderabad - 502032)</option>
-                        <option value="Teqqnoworld 2">Teqqnoworld 2 (Hyderabad - 500090)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-zinc-400 mb-1">Pickup Date</label>
-                      <input
-                        type="date"
-                        value={pickupDateInput}
-                        onChange={(e) => setPickupDateInput(e.target.value)}
-                        className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-zinc-400 mb-1">Pickup Slot</label>
-                      <select
-                        value={pickupTimeInput}
-                        onChange={(e) => setPickupTimeInput(e.target.value)}
-                        className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
-                      >
-                        <option value="11:00:00">11:00 AM - 02:00 PM</option>
-                        <option value="14:00:00">02:00 PM - 05:00 PM</option>
-                        <option value="17:00:00">05:00 PM - 07:00 PM</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-zinc-400 mb-1">Package Count</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={pickupPkgCount}
-                        onChange={(e) => setPickupPkgCount(Number(e.target.value) || 1)}
-                        className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                  </div>
-
-                  {pickupResult && (
+                    {/* RESPONSIVE CARDS VIEW (Always on Mobile/Tablet, optional on Desktop) */}
                     <div
-                      className={`p-3 rounded-xl border text-xs ${
-                        pickupResult.success
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                          : 'bg-red-500/10 border-red-500/30 text-red-300'
-                      }`}
+                      className={`${
+                        ordersViewMode === 'table' ? 'md:hidden' : ''
+                      } p-4 space-y-3.5 bg-slate-50/40`}
                     >
-                      {pickupResult.message}
-                    </div>
-                  )}
+                      {paginatedOrders.map((order) => {
+                        const { product, unitPrice, total } = getOrderEstimates(order);
+                        const parsed = parseOrderNotes(order.custom_notes);
+                        const thumb = getOrderThumbnail(order, parsed);
+                        const payBadge = getPaymentBadge(parsed, total);
+                        const hasRealAwb =
+                          Boolean(order.tracking_number) &&
+                          !order.tracking_number!.toLowerCase().includes('awaiting');
 
-                  <button
-                    onClick={handleSchedulePickup}
-                    disabled={schedulingPickup}
-                    className="w-full py-2.5 px-4 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 min-h-[42px]"
-                  >
-                    {schedulingPickup ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Calendar className="w-4 h-4" />
-                    )}
-                    <span>{schedulingPickup ? 'Scheduling...' : 'Request Delhivery Pickup'}</span>
-                  </button>
-                </div>
-
-                {/* Live AWB Track + Pincode Checker (6 cols) */}
-                <div className="lg:col-span-6 bg-[#121318] border border-white/[0.08] rounded-2xl p-5 sm:p-6 space-y-5">
-                  <div className="space-y-3">
-                    <h2 className="font-display font-semibold text-base text-white">
-                      Quick AWB Tracker &amp; Pincode Check
-                    </h2>
-                    <form onSubmit={handleQuickTrackLookup} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={quickTrackAwb}
-                        onChange={(e) => setQuickTrackAwb(e.target.value)}
-                        placeholder="Enter Delhivery Waybill / AWB number..."
-                        className="flex-1 bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3.5 text-xs font-mono text-white outline-none focus:border-[#FF7A00]"
-                      />
-                      <button
-                        type="submit"
-                        disabled={loadingQuickTrack}
-                        className="px-4 py-2.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] text-white text-xs font-semibold cursor-pointer disabled:opacity-50 whitespace-nowrap"
-                      >
-                        {loadingQuickTrack ? 'Tracking...' : 'Track AWB'}
-                      </button>
-                    </form>
-                    {quickTrackResult && (
-                      <div className="p-3 rounded-xl bg-[#0A0B0E] border border-white/[0.08] text-xs space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">Waybill: {quickTrackResult.waybill}</span>
-                          <span className="font-semibold text-emerald-400">
-                            {quickTrackResult.currentStatus || 'Pending'}
-                          </span>
-                        </div>
-                        {quickTrackResult.statusLocation && (
-                          <div className="text-zinc-300">Location: {quickTrackResult.statusLocation}</div>
-                        )}
-                        {quickTrackResult.message && !quickTrackResult.success && (
-                          <div className="text-amber-300">{quickTrackResult.message}</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pt-4 border-t border-white/[0.07] space-y-3">
-                    <div className="text-xs font-medium text-zinc-300">
-                      Verify Customer Delivery Pincode (Prepaid Serviceability)
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        maxLength={6}
-                        value={testPinInput}
-                        onChange={(e) => setTestPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                        placeholder="6-digit pincode"
-                        className="w-40 bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3.5 text-xs font-mono text-white outline-none focus:border-[#FF7A00]"
-                      />
-                      <button
-                        onClick={handleTestDelhiveryPin}
-                        disabled={testingPin}
-                        className="px-4 py-2.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
-                      >
-                        {testingPin ? 'Checking...' : 'Check Pincode'}
-                      </button>
-                    </div>
-                    {testPinResult && (
-                      <div
-                        className={`p-3 rounded-xl border text-xs font-mono ${
-                          testPinResult.serviceable
-                            ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
-                            : 'bg-red-500/10 border-red-500/25 text-red-300'
-                        }`}
-                      >
-                        {testPinResult.message}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Ready to Ship vs Shipped Queues */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Ready to Ship */}
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display font-semibold text-base text-white">
-                      Ready to Manifest ({readyToShipOrders.length})
-                    </h3>
-                    <span className="text-xs text-zinc-400">Awaiting AWB</span>
-                  </div>
-                  {readyToShipOrders.length === 0 ? (
-                    <div className="py-10 text-center text-xs text-zinc-400">
-                      All active orders have waybills assigned.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-white/[0.07]">
-                      {readyToShipOrders.map((o) => {
-                        const parsed = parseOrderNotes(o.custom_notes);
-                        const { product } = getOrderEstimates(o);
                         return (
                           <div
-                            key={o.id}
-                            className="py-3 flex items-center justify-between gap-3 text-xs"
+                            key={order.id}
+                            className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs hover:shadow-md transition-shadow"
                           >
-                            <div className="min-w-0">
-                              <div className="font-mono font-bold text-[#FF7A00]">
-                                #{formatOrderRef(o.id)}
-                                <span className="text-zinc-300 font-sans font-medium ml-2">
-                                  {o.customer_name}
+                            <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <button
+                                    onClick={() => setInspectingOrder(order)}
+                                    className="font-mono font-bold text-[#FF7900] hover:underline cursor-pointer"
+                                  >
+                                    #{formatOrderRef(order.id)}
+                                  </button>
+                                  <span className="text-slate-300">·</span>
+                                  <span className="text-slate-500 font-mono tabular-nums">
+                                    {new Date(order.created_at).toLocaleDateString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                </div>
+                                <div className="text-sm font-bold text-[#071B35] mt-0.5">
+                                  {order.customer_name}{' '}
+                                  <span className="text-xs font-mono text-slate-500 font-normal">
+                                    ({order.phone})
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="text-right font-mono tabular-nums">
+                                <div className="text-base font-bold text-[#071B35]">
+                                  ₹{total.toLocaleString('en-IN')}
+                                </div>
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-sans font-semibold border mt-0.5 ${
+                                    payBadge.kind === 'paid'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : payBadge.kind === 'partial'
+                                      ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  }`}
+                                >
+                                  {payBadge.label}
                                 </span>
                               </div>
-                              <div className="text-zinc-400 truncate mt-0.5">
-                                {product?.name || o.product_id} ({o.quantity} pcs)
-                                {parsed.parsedAddress.city
-                                  ? ` · ${parsed.parsedAddress.city} ${parsed.parsedAddress.pincode}`
-                                  : ''}
+                            </div>
+
+                            <div className="flex items-start gap-3">
+                              <OrderThumb
+                                src={thumb}
+                                alt={product?.name || 'Order'}
+                                sizeClass="w-14 h-14"
+                                onClick={
+                                  parsed.frontMockupUrl || order.logo_url
+                                    ? () =>
+                                        setPreviewLogoUrl(parsed.frontMockupUrl || order.logo_url!)
+                                    : undefined
+                                }
+                              />
+                              <div className="min-w-0 flex-1 text-xs space-y-1">
+                                <div className="font-semibold text-[#071B35]">
+                                  {product?.name || order.product_id || 'Custom Product'}{' '}
+                                  <span className="font-mono text-[#FF7900]">
+                                    · {order.quantity} pcs @ ₹{unitPrice}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {[parsed.color, parsed.size, parsed.method]
+                                    .filter(Boolean)
+                                    .join(' · ') || 'Custom Specifications'}
+                                </div>
+                                {parsed.parsedAddress.city && (
+                                  <div className="text-[11px] text-slate-400">
+                                    {parsed.parsedAddress.city} {parsed.parsedAddress.pincode}
+                                  </div>
+                                )}
                               </div>
                             </div>
-                            <button
-                              onClick={() => openDispatchModalForOrder(o)}
-                              className="px-3 py-2 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold shrink-0 cursor-pointer"
-                            >
-                              Book AWB
-                            </button>
+
+                            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <select
+                                  value={order.status}
+                                  disabled={updatingOrderId === order.id}
+                                  onChange={(e) =>
+                                    handleStatusChange(order.id, e.target.value as OrderStatus)
+                                  }
+                                  className={`text-xs font-semibold py-2 px-3 rounded-xl border outline-none cursor-pointer min-h-[40px] ${STATUS_META[order.status].pillClass}`}
+                                >
+                                  <option value="pending">Pending Review</option>
+                                  <option value="approved">Proof Approved</option>
+                                  <option value="in-production">In Production</option>
+                                  <option value="dispatched">Dispatched</option>
+                                  <option value="delivered">Delivered</option>
+                                </select>
+
+                                {hasRealAwb ? (
+                                  <div className="flex items-center gap-2 text-xs font-mono text-[#071B35] bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl">
+                                    <span>AWB: {order.tracking_number}</span>
+                                    <button
+                                      onClick={() => handleTrackDelhiveryOrder(order.tracking_number!)}
+                                      className="text-[#FF7900] hover:underline font-sans font-semibold cursor-pointer"
+                                    >
+                                      Track
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => openDispatchModalForOrder(order)}
+                                    className="px-3.5 py-2 rounded-xl bg-white hover:bg-[#FF7900] text-[#FF7900] hover:text-white border border-[#FF7900] text-xs font-semibold flex items-center gap-1.5 cursor-pointer min-h-[40px] transition-colors"
+                                  >
+                                    <Truck className="w-3.5 h-3.5" />
+                                    <span>Book Delivery</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={() => setInspectingOrder(order)}
+                                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-[#071B35] text-[#071B35] hover:text-white text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px] transition-colors"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Inspect</span>
+                                </button>
+                                <button
+                                  onClick={() => generateAdminOrderInvoicePdf(order, PRODUCTS)}
+                                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px]"
+                                >
+                                  <Download className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Invoice</span>
+                                </button>
+                                <a
+                                  href={getDirectClientWhatsAppUrl({
+                                    phone: order.phone,
+                                    name: order.customer_name,
+                                    type: 'order',
+                                    orderId: formatOrderRef(order.id),
+                                    status: order.status,
+                                    courier: order.courier_partner,
+                                    trackingNumber: order.tracking_number,
+                                  })}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-2 rounded-xl bg-[#1EBE5D] hover:bg-[#19a851] text-white text-xs font-semibold flex items-center gap-1.5 min-h-[40px]"
+                                >
+                                  <WhatsAppIcon className="w-3.5 h-3.5 text-white" />
+                                  <span>WhatsApp</span>
+                                </a>
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
                     </div>
-                  )}
-                </div>
 
-                {/* Active Shipped AWBs */}
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display font-semibold text-base text-white">
-                      Manifested Shipments ({activeAwbOrders.length})
-                    </h3>
-                    <span className="text-xs text-zinc-400">Labels &amp; Live Tracking</span>
-                  </div>
-                  {activeAwbOrders.length === 0 ? (
-                    <div className="py-10 text-center text-xs text-zinc-400">
-                      Shipped orders with Delhivery waybills will appear here.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-white/[0.07]">
-                      {activeAwbOrders.map((o) => (
-                        <div
-                          key={o.id}
-                          className="py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                    {/* PAGINATION FOOTER (Matching Reference) */}
+                    <div className="px-4 py-3.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono tabular-nums">
+                          Showing{' '}
+                          <strong className="text-[#071B35]">
+                            {filteredOrders.length === 0 ? 0 : (safePage - 1) * pageSize + 1}
+                          </strong>
+                          –
+                          <strong className="text-[#071B35]">
+                            {Math.min(safePage * pageSize, filteredOrders.length)}
+                          </strong>{' '}
+                          of <strong className="text-[#071B35]">{filteredOrders.length}</strong> orders
+                        </span>
+                        <select
+                          value={pageSize}
+                          onChange={(e) => setPageSize(Number(e.target.value))}
+                          className="bg-slate-50 border border-slate-200 rounded-lg py-1 px-2 text-xs text-[#071B35] outline-none cursor-pointer"
+                          aria-label="Rows per page"
                         >
-                          <div className="min-w-0">
-                            <div className="font-mono font-bold text-white">
-                              {o.tracking_number}
-                              <span className="text-zinc-400 font-sans font-normal ml-2">
-                                · {o.customer_name}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-zinc-400 mt-0.5">
-                              #{formatOrderRef(o.id)} · {o.courier_partner || 'Delhivery'} ·{' '}
-                              {STATUS_META[o.status].label}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              onClick={() => handleTrackDelhiveryOrder(o.tracking_number!)}
-                              className="px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-amber-300 text-[11px] font-semibold cursor-pointer"
-                            >
-                              Track
-                            </button>
-                            <a
-                              href={getDelhiveryLabelUrl(o.tracking_number!)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-[11px] font-semibold inline-flex items-center gap-1"
-                            >
-                              <Printer className="w-3 h-3" />
-                              <span>Label PDF</span>
-                            </a>
-                            {o.status !== 'delivered' && (
-                              <button
-                                onClick={() => handleStatusChange(o.id, 'delivered')}
-                                className="px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-emerald-600 text-zinc-200 hover:text-white text-[11px] font-semibold cursor-pointer"
-                              >
-                                Mark Delivered
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ================================================================= */}
-          {/* TAB 3: ABANDONED LEADS */}
-          {/* ================================================================= */}
-          {activeTab === 'abandoned' && (
-            <div className="space-y-6">
-              <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <h2 className="font-display font-bold text-lg sm:text-xl text-white">
-                    Abandoned Checkout Recovery Queue
-                  </h2>
-                  <p className="text-xs text-zinc-400 max-w-2xl">
-                    Buyers who started checkout and entered phone or email without completing payment. Follow up quickly via WhatsApp to convert them.
-                  </p>
-                </div>
-                <div className="text-left sm:text-right font-mono tabular-nums">
-                  <div className="text-xs text-zinc-400">At-Risk Value</div>
-                  <div className="text-2xl font-bold text-amber-400">
-                    ₹{analytics.abandonedValueAtRisk.toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-xs text-zinc-400">
-                    {analytics.unrecoveredCount} pending · {analytics.recoveryRate}% recovered
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Search leads by Name, Phone, Email, Company..."
-                    value={leadSearchQuery}
-                    onChange={(e) => setLeadSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-[#0A0B0E] border border-white/[0.1] rounded-xl text-xs text-white placeholder:text-zinc-500 focus:border-[#FF7A00] outline-none"
-                  />
-                </div>
-                <div className="flex items-center gap-1 bg-[#0A0B0E] p-1 rounded-xl border border-white/[0.08] shrink-0">
-                  {(
-                    [
-                      { id: 'all', label: `All (${abandonedLeads.length})` },
-                      { id: 'unrecovered', label: `Pending (${analytics.unrecoveredCount})` },
-                      { id: 'recovered', label: `Recovered (${analytics.recoveredCount})` },
-                    ] as const
-                  ).map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setLeadFilter(f.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors ${
-                        leadFilter === f.id
-                          ? 'bg-[#FF7A00] text-white font-semibold'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {loadingLeads ? (
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-3">
-                  {[1, 2, 3].map((n) => (
-                    <div key={n} className="h-16 rounded-xl bg-white/[0.04] animate-pulse" />
-                  ))}
-                </div>
-              ) : filteredLeads.length === 0 ? (
-                <div className="text-center py-16 bg-[#121318] rounded-2xl border border-white/[0.08] space-y-2">
-                  <UserCheck className="w-10 h-10 text-emerald-400 mx-auto" />
-                  <h3 className="font-semibold text-white text-base">No Abandoned Leads Found</h3>
-                  <p className="text-xs text-zinc-400">
-                    Incomplete checkout attempts automatically appear here.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {filteredLeads.map((lead) => {
-                    const leadPhone = lead.phone || '';
-                    const leadName = lead.customer_name || 'Prospective Buyer';
-                    const cartItems = Array.isArray(lead.cart_items) ? lead.cart_items : [];
-                    return (
-                      <div
-                        key={lead.id}
-                        className="bg-[#121318] border border-white/[0.08] rounded-2xl p-4 sm:p-5 space-y-4"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-white/[0.07]">
-                          <div className="space-y-0.5">
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                              <span
-                                className={`font-semibold ${
-                                  lead.recovered ? 'text-emerald-400' : 'text-amber-400'
-                                }`}
-                              >
-                                {lead.recovered ? 'Recovered' : 'Pending Recovery'}
-                              </span>
-                              <span className="text-zinc-600">·</span>
-                              <span className="text-zinc-400 font-mono tabular-nums">
-                                {lead.updated_at
-                                  ? new Date(lead.updated_at).toLocaleDateString('en-IN', {
-                                      day: 'numeric',
-                                      month: 'short',
-                                      hour: '2-digit',
-                                      minute: '2-digit',
-                                    })
-                                  : 'Recently active'}
-                              </span>
-                              {lead.company && (
-                                <>
-                                  <span className="text-zinc-600">·</span>
-                                  <span className="text-zinc-300">{lead.company}</span>
-                                </>
-                              )}
-                            </div>
-                            <div className="text-sm font-semibold text-white">
-                              {leadName}{' '}
-                              {leadPhone && (
-                                <span className="font-mono text-xs text-zinc-400 font-normal">
-                                  · {leadPhone}
-                                </span>
-                              )}
-                              {lead.email && (
-                                <span className="text-xs text-zinc-400 font-normal ml-2">
-                                  ({lead.email})
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-mono tabular-nums font-bold text-sm text-amber-400 mr-2">
-                              ₹{Number(lead.cart_total || 0).toLocaleString('en-IN')}
-                            </span>
-                            {leadPhone && (
-                              <a
-                                href={getDirectClientWhatsAppUrl({
-                                  phone: leadPhone,
-                                  name: leadName,
-                                  type: 'abandoned',
-                                  cartTotal: lead.cart_total,
-                                })}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3.5 py-2 rounded-xl bg-[#1EBE5D] hover:bg-[#19a851] text-white text-xs font-semibold flex items-center gap-1.5 min-h-[40px]"
-                              >
-                                <WhatsAppIcon className="w-3.5 h-3.5 text-white" />
-                                <span>WhatsApp</span>
-                              </a>
-                            )}
-                            {!lead.recovered && (
-                              <button
-                                onClick={() => handleRecoverLead(lead.id)}
-                                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                              >
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Mark Recovered</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {cartItems.length > 0 && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                            {cartItems.map((item: any, idx: number) => (
-                              <div
-                                key={idx}
-                                className="flex items-center gap-3 p-2.5 rounded-xl bg-[#0A0B0E] border border-white/[0.06] text-xs"
-                              >
-                                {item.previewUrl ? (
-                                  <img
-                                    src={item.previewUrl}
-                                    alt={item.productName || 'Product'}
-                                    className="w-10 h-10 rounded-lg object-contain bg-zinc-900 shrink-0"
-                                  />
-                                ) : (
-                                  <div className="w-10 h-10 rounded-lg bg-zinc-900 flex items-center justify-center text-[10px] text-zinc-500 shrink-0">
-                                    Item
-                                  </div>
-                                )}
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium text-white truncate">
-                                    {item.productName || 'Custom Item'}
-                                  </div>
-                                  <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                                    Qty: {item.quantity} · ₹
-                                    {Number(item.totalPrice || item.unitPrice * item.quantity || 0).toLocaleString('en-IN')}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                          <option value={10}>10 / page</option>
+                          <option value={25}>25 / page</option>
+                          <option value={50}>50 / page</option>
+                        </select>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* ================================================================= */}
-          {/* TAB 4: ANALYTICS & REVENUE */}
-          {/* ================================================================= */}
-          {activeTab === 'analytics' && (
-            <div className="space-y-6">
-              {/* Primary Financial KPIs */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-400">
-                    <span>Estimated Gross Value</span>
-                    <IndianRupee className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <div className="font-display font-bold text-2xl sm:text-3xl text-white font-mono tabular-nums">
-                    ₹{analytics.totalRevenue.toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-xs text-zinc-400 font-mono tabular-nums">
-                    Avg Order: ₹{analytics.aov.toLocaleString('en-IN')}
-                  </div>
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-400">
-                    <span>Paid Online (Prepaid/50%)</span>
-                    <CreditCard className="w-4 h-4 text-[#FF7A00]" />
-                  </div>
-                  <div className="font-display font-bold text-2xl sm:text-3xl text-emerald-400 font-mono tabular-nums">
-                    ₹{analytics.totalPaidRecorded.toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-xs text-zinc-400 font-mono tabular-nums">
-                    Remaining Balance: ₹{analytics.totalBalanceRecorded.toLocaleString('en-IN')}
-                  </div>
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-400">
-                    <span>Checkout Conversion</span>
-                    <TrendingUp className="w-4 h-4 text-sky-400" />
-                  </div>
-                  <div className="font-display font-bold text-2xl sm:text-3xl text-white font-mono tabular-nums">
-                    {analytics.conversionRate}%
-                  </div>
-                  <div className="text-xs text-zinc-400 font-mono tabular-nums">
-                    {analytics.totalOrdersCount} placed / {analytics.totalOrdersCount + analytics.totalAbandonedCount} sessions
-                  </div>
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-5 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-400">
-                    <span>Abandoned Value</span>
-                    <ShoppingCart className="w-4 h-4 text-amber-400" />
-                  </div>
-                  <div className="font-display font-bold text-2xl sm:text-3xl text-amber-400 font-mono tabular-nums">
-                    ₹{analytics.abandonedValueAtRisk.toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-xs text-zinc-400 font-mono tabular-nums">
-                    {analytics.unrecoveredCount} pending · {analytics.recoveryRate}% recovery rate
-                  </div>
-                </div>
-              </div>
-
-              {/* Pipeline Stage Distribution & Top Products */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                <div className="lg:col-span-6 bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                  <div>
-                    <h3 className="font-display font-semibold text-base text-white">
-                      Order Fulfillment Pipeline
-                    </h3>
-                    <p className="text-xs text-zinc-400">
-                      Live distribution across production &amp; Delhivery shipping stages
-                    </p>
-                  </div>
-                  <div className="space-y-3">
-                    {(Object.keys(STATUS_META) as OrderStatus[]).map((st) => {
-                      const count = analytics.statusCounts[st];
-                      const pct =
-                        analytics.totalOrdersCount > 0
-                          ? Math.round((count / analytics.totalOrdersCount) * 100)
-                          : 0;
-                      return (
-                        <div key={st} className="space-y-1">
-                          <div className="flex justify-between text-xs">
-                            <span className="text-zinc-200 font-medium">{STATUS_META[st].label}</span>
-                            <span className="font-mono tabular-nums text-zinc-400">
-                              {count} orders ({pct}%)
-                            </span>
-                          </div>
-                          <div className="w-full h-2.5 bg-[#0A0B0E] rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${STATUS_META[st].barClass}`}
-                              style={{ width: `${Math.max(pct, count > 0 ? 4 : 0)}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="lg:col-span-6 bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                  <div>
-                    <h3 className="font-display font-semibold text-base text-white">
-                      Top Custom Products
-                    </h3>
-                    <p className="text-xs text-zinc-400">Ranked by estimated order volume and revenue</p>
-                  </div>
-                  {analytics.topProducts.length === 0 ? (
-                    <div className="py-10 text-center text-xs text-zinc-400">
-                      Product rankings will populate once orders are recorded.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-white/[0.07]">
-                      {analytics.topProducts.map((p, idx) => (
-                        <div
-                          key={p.name}
-                          className="py-3 flex items-center justify-between gap-4 text-xs"
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setCurrentPage(1)}
+                          disabled={safePage <= 1}
+                          className="w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                          aria-label="First page"
                         >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="font-mono tabular-nums text-zinc-500 w-5">
-                              0{idx + 1}.
-                            </span>
-                            <div className="min-w-0">
-                              <div className="font-semibold text-white truncate">{p.name}</div>
-                              <div className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                                {p.orders} orders · {p.units} units
-                              </div>
-                            </div>
-                          </div>
-                          <div className="font-mono tabular-nums font-bold text-emerald-400 shrink-0">
-                            ₹{p.revenue.toLocaleString('en-IN')}
-                          </div>
-                        </div>
-                      ))}
+                          <ChevronsLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                          disabled={safePage <= 1}
+                          className="w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                          aria-label="Previous page"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+                          let pageNum = idx + 1;
+                          if (totalPages > 5 && safePage > 3) {
+                            pageNum = Math.min(totalPages - 4 + idx, safePage - 2 + idx);
+                          }
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={`w-8 h-8 rounded-lg text-xs font-mono font-semibold flex items-center justify-center cursor-pointer transition-colors ${
+                                safePage === pageNum
+                                  ? 'bg-[#FF7900] text-white shadow-xs'
+                                  : 'border border-slate-200 bg-white hover:bg-slate-50 text-[#071B35]'
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
+                        <button
+                          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                          disabled={safePage >= totalPages}
+                          className="w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                          aria-label="Next page"
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setCurrentPage(totalPages)}
+                          disabled={safePage >= totalPages}
+                          className="w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-40 flex items-center justify-center cursor-pointer"
+                          aria-label="Last page"
+                        >
+                          <ChevronsRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ================================================================= */}
-          {/* TAB 5: INTEGRATIONS & SUPABASE SQL */}
-          {/* ================================================================= */}
-          {activeTab === 'schema' && (
-            <div className="space-y-6">
-              {/* Hostinger SMTP Card */}
-              <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-display font-semibold text-base text-white flex items-center gap-2">
-                      <Mail className="w-5 h-5 text-[#FF7A00]" />
-                      <span>Order Email Notifications (Hostinger SMTP)</span>
-                    </h3>
-                    <p className="text-xs text-zinc-400 mt-0.5">
-                      Dispatches confirmation &amp; placed artwork mockups to customer and admin ({smtpStatus?.adminEmail || 'teqqnoworld@gmail.com'}).
-                    </p>
-                  </div>
-                  <span
-                    className={`px-3 py-1 rounded-lg text-xs font-mono font-semibold border ${
-                      smtpStatus?.configured
-                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                    }`}
-                  >
-                    {smtpStatus?.configured ? 'LIVE SMTP CONNECTED' : 'CREDENTIALS MISSING'}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5">
-                    <div className="text-[11px] text-zinc-400">SMTP Host &amp; Port</div>
-                    <div className="font-mono text-zinc-100 mt-1">
-                      {smtpStatus ? `${smtpStatus.host}:${smtpStatus.port}` : 'smtp.hostinger.com:465'}
-                    </div>
-                  </div>
-                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5">
-                    <div className="text-[11px] text-zinc-400">Sender Email</div>
-                    <div className="font-mono text-zinc-100 mt-1 truncate">
-                      {smtpStatus?.senderEmail || '(not set)'}
-                    </div>
-                  </div>
-                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5">
-                    <div className="text-[11px] text-zinc-400">Admin Alert Email</div>
-                    <div className="font-mono text-emerald-400 mt-1 truncate">
-                      {smtpStatus?.adminEmail || 'teqqnoworld@gmail.com'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                  <input
-                    type="email"
-                    value={testEmailInput}
-                    onChange={(e) => setTestEmailInput(e.target.value)}
-                    placeholder="Enter email for test delivery..."
-                    className="flex-1 bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3.5 text-xs text-white focus:border-[#FF7A00] outline-none"
-                  />
-                  <button
-                    onClick={handleTestSmtpEmail}
-                    disabled={testingSmtp}
-                    className="bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold px-5 py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{testingSmtp ? 'Testing...' : 'Send Test Email'}</span>
-                  </button>
-                </div>
-
-                {smtpTestResult && (
-                  <div
-                    className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
-                      smtpTestResult.success
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                        : 'bg-red-500/10 border-red-500/30 text-red-300'
-                    }`}
-                  >
-                    {smtpTestResult.success ? (
-                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                    ) : (
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    )}
-                    <span>{smtpTestResult.message}</span>
-                  </div>
+                  </>
                 )}
               </div>
-
-              {/* Razorpay + Delhivery Side-by-Side */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-display font-semibold text-base text-white flex items-center gap-2">
-                      <CreditCard className="w-5 h-5 text-[#FF7A00]" />
-                      <span>Razorpay Payment Gateway</span>
-                    </h3>
-                    <span
-                      className={`px-3 py-1 rounded-lg text-[11px] font-mono font-semibold border ${
-                        razorpayStatus?.configured
-                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                      }`}
-                    >
-                      {razorpayStatus?.configured
-                        ? razorpayStatus.mode === 'test'
-                          ? 'TEST MODE CONNECTED'
-                          : 'LIVE CONNECTED'
-                        : 'AWAITING KEYS'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    Checkout enforces <strong className="text-white">100% Full Prepaid</strong> and{' '}
-                    <strong className="text-white">50% Partial Advance</strong> (Zero COD). Keys are loaded securely on the Express server via{' '}
-                    <code className="text-zinc-200">RAZORPAY_KEY_ID</code> &amp;{' '}
-                    <code className="text-zinc-200">RAZORPAY_KEY_SECRET</code>.
-                  </p>
-                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5 text-xs flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] text-zinc-400">Active Key ID</div>
-                      <div className="font-mono text-zinc-200 mt-0.5">
-                        {razorpayStatus?.keyId || '(not set — sandbox fallback active)'}
-                      </div>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        setTestingRazorpay(true);
-                        setRazorpayTestResult(null);
-                        try {
-                          const res = await testRazorpayConnection();
-                          setRazorpayTestResult({ success: res.success, message: res.message });
-                        } finally {
-                          setTestingRazorpay(false);
-                        }
-                      }}
-                      disabled={testingRazorpay}
-                      className="px-3.5 py-2 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-semibold text-white border border-white/[0.08] transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      {testingRazorpay ? 'Verifying...' : 'Verify Live API'}
-                    </button>
-                  </div>
-                  {razorpayTestResult && (
-                    <div
-                      className={`p-3 rounded-xl text-xs font-medium border ${
-                        razorpayTestResult.success
-                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                          : 'bg-red-500/10 text-red-300 border-red-500/30'
-                      }`}
-                    >
-                      {razorpayTestResult.message}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-display font-semibold text-base text-white flex items-center gap-2">
-                      <Truck className="w-5 h-5 text-[#FF7A00]" />
-                      <span>Delhivery One Logistics (Prepaid)</span>
-                    </h3>
-                    <span
-                      className={`px-3 py-1 rounded-lg text-[11px] font-mono font-semibold border ${
-                        delhiveryStatus?.configured
-                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                      }`}
-                    >
-                      {delhiveryStatus?.configured ? 'LIVE API CONNECTED' : 'TOKEN MISSING'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2.5 text-xs">
-                    {(delhiveryStatus?.pickups || [
-                      { name: 'Teqqnoworld', city: 'Hyderabad', state: 'Telangana', pin: '502032' },
-                      { name: 'Teqqnoworld 2', city: 'Hyderabad', state: 'Telangana', pin: '500090' },
-                    ]).map((wh) => (
-                      <div key={wh.name} className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3">
-                        <div className="font-semibold text-white">{wh.name}</div>
-                        <div className="text-[11px] text-zinc-400 font-mono">
-                          {wh.city} · {wh.pin}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('dispatch')}
-                    className="w-full py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-xs font-medium text-white flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>Open Delhivery Dispatch &amp; Pickup Console</span>
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Supabase PostgreSQL Schema */}
-              <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-display font-semibold text-base text-white">
-                      Supabase PostgreSQL Schema &amp; RLS Setup
-                    </h3>
-                    <p className="text-xs text-zinc-400">
-                      Run this SQL script in Supabase SQL Editor to ensure custom_orders, abandoned_checkouts, and courier tracking columns exist.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const sql = `-- 1. CUSTOM ORDERS TABLE WITH COURIER DISPATCH
-CREATE TABLE IF NOT EXISTS public.custom_orders (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_name TEXT NOT NULL,
-    customer_email TEXT NOT NULL,
-    company TEXT,
-    phone TEXT NOT NULL,
-    product_id TEXT,
-    quantity INTEGER NOT NULL CHECK (quantity >= 1),
-    logo_url TEXT,
-    custom_notes TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'in-production', 'dispatched', 'delivered')),
-    courier_partner TEXT,
-    tracking_number TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
-);
-
-ALTER TABLE public.custom_orders ADD COLUMN IF NOT EXISTS courier_partner TEXT;
-ALTER TABLE public.custom_orders ADD COLUMN IF NOT EXISTS tracking_number TEXT;
-
--- 2. ABANDONED CHECKOUTS RECOVERY TABLE
-CREATE TABLE IF NOT EXISTS public.abandoned_checkouts (
-    id TEXT PRIMARY KEY,
-    customer_name TEXT,
-    email TEXT,
-    phone TEXT,
-    company TEXT,
-    cart_items JSONB DEFAULT '[]'::jsonb,
-    cart_total NUMERIC(10, 2) DEFAULT 0,
-    recovered BOOLEAN DEFAULT FALSE,
-    recovered_at TIMESTAMPTZ,
-    order_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
-);
-
--- 3. ROW LEVEL SECURITY (RLS) POLICIES
-ALTER TABLE public.custom_orders ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public insert custom_orders" ON public.custom_orders FOR INSERT TO public WITH CHECK (true);
-CREATE POLICY "Public select custom_orders" ON public.custom_orders FOR SELECT TO public USING (true);
-CREATE POLICY "Public update custom_orders" ON public.custom_orders FOR UPDATE TO public USING (true);
-
-ALTER TABLE public.abandoned_checkouts ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public all abandoned_checkouts" ON public.abandoned_checkouts FOR ALL TO public USING (true) WITH CHECK (true);`;
-                      navigator.clipboard.writeText(sql);
-                      setCopiedSql(true);
-                      setTimeout(() => setCopiedSql(false), 3000);
-                    }}
-                    className="bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-2 cursor-pointer"
-                  >
-                    {copiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedSql ? 'Copied SQL Script' : 'Copy Supabase SQL'}</span>
-                  </button>
-                </div>
-
-                <pre className="bg-[#0A0B0E] border border-white/[0.08] rounded-xl p-4 text-[11px] font-mono text-zinc-300 overflow-x-auto max-h-80 leading-relaxed">
-{`-- 1. CUSTOM ORDERS TABLE WITH COURIER DISPATCH
-CREATE TABLE IF NOT EXISTS public.custom_orders (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_name TEXT NOT NULL,
-    customer_email TEXT NOT NULL,
-    company TEXT,
-    phone TEXT NOT NULL,
-    product_id TEXT,
-    quantity INTEGER NOT NULL CHECK (quantity >= 1),
-    logo_url TEXT,
-    custom_notes TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'in-production', 'dispatched', 'delivered')),
-    courier_partner TEXT,
-    tracking_number TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT TIMEZONE('utc'::text, NOW())
-);`}
-                </pre>
-              </div>
             </div>
+          )}
+
+          {activeSection === 'dispatch' && (
+            <DispatchCenterView
+              delhiveryStatus={delhiveryStatus}
+              readyToShipOrders={readyToShipOrders}
+              activeAwbOrders={activeAwbOrders}
+              diagPickupName={diagPickupName}
+              setDiagPickupName={setDiagPickupName}
+              pickupDateInput={pickupDateInput}
+              setPickupDateInput={setPickupDateInput}
+              pickupTimeInput={pickupTimeInput}
+              setPickupTimeInput={setPickupTimeInput}
+              pickupPkgCount={pickupPkgCount}
+              setPickupPkgCount={setPickupPkgCount}
+              schedulingPickup={schedulingPickup}
+              pickupResult={pickupResult}
+              onSchedulePickup={handleSchedulePickup}
+              quickTrackAwb={quickTrackAwb}
+              setQuickTrackAwb={setQuickTrackAwb}
+              loadingQuickTrack={loadingQuickTrack}
+              quickTrackResult={quickTrackResult}
+              onQuickTrackLookup={handleQuickTrackLookup}
+              testPinInput={testPinInput}
+              setTestPinInput={setTestPinInput}
+              testingPin={testingPin}
+              testPinResult={testPinResult}
+              onTestDelhiveryPin={handleTestDelhiveryPin}
+              onOpenDispatchModal={openDispatchModalForOrder}
+              onTrackDelhiveryOrder={handleTrackDelhiveryOrder}
+              onStatusChange={handleStatusChange}
+            />
+          )}
+
+          {activeSection === 'products' && (
+            <ProductsCatalogView
+              dbProducts={dbProducts}
+              onCreateOrderForProduct={(pid) => {
+                setNewOrdProductId(pid);
+                setCreateOrderOpen(true);
+              }}
+            />
+          )}
+
+          {activeSection === 'customers' && (
+            <CustomersDirectoryView
+              orders={orders}
+              onInspectOrder={(o) => setInspectingOrder(o)}
+            />
+          )}
+
+          {activeSection === 'marketing' && (
+            <MarketingRecoveryView
+              abandonedLeads={abandonedLeads}
+              loadingLeads={loadingLeads}
+              analytics={analytics}
+              onRecoverLead={handleRecoverLead}
+            />
+          )}
+
+          {activeSection === 'analytics' && (
+            <ReportsAnalyticsView
+              orders={orders}
+              analytics={analytics}
+              onExportCsv={handleExportOrdersCsv}
+            />
+          )}
+
+          {activeSection === 'integrations' && (
+            <IntegrationsSetupView
+              smtpStatus={smtpStatus}
+              razorpayStatus={razorpayStatus}
+              delhiveryStatus={delhiveryStatus}
+              testEmailInput={testEmailInput}
+              setTestEmailInput={setTestEmailInput}
+              testingSmtp={testingSmtp}
+              smtpTestResult={smtpTestResult}
+              onTestSmtpEmail={handleTestSmtpEmail}
+              testingRazorpay={testingRazorpay}
+              razorpayTestResult={razorpayTestResult}
+              onVerifyRazorpay={async () => {
+                setTestingRazorpay(true);
+                setRazorpayTestResult(null);
+                try {
+                  const res = await testRazorpayConnection();
+                  setRazorpayTestResult({ success: res.success, message: res.message });
+                } finally {
+                  setTestingRazorpay(false);
+                }
+              }}
+              onOpenDispatchTab={() => setActiveSection('dispatch')}
+            />
           )}
         </main>
       </div>
+
+      {/* ===================================================================== */}
+      {/* MODAL: CREATE CUSTOM ORDER (+ CREATE ORDER BUTTON) */}
+      {/* ===================================================================== */}
+      {createOrderOpen && (
+        <div className="fixed inset-0 z-[60] bg-[#071B35]/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-4 animate-admin-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#FF7900]/10 text-[#FF7900] flex items-center justify-center">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-[#071B35] text-base">
+                    Create Custom Order
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Saves directly into your live Supabase orders queue
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCreateOrderOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-[#071B35] cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateManualOrder} className="space-y-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">
+                    Customer Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newOrdCustomer}
+                    onChange={(e) => setNewOrdCustomer(e.target.value)}
+                    placeholder="e.g. Rajesh Sharma"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">
+                    Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={newOrdPhone}
+                    onChange={(e) => setNewOrdPhone(e.target.value)}
+                    placeholder="+91 9876543210"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] font-mono focus:border-[#FF7900] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">
+                    Customer Email *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={newOrdEmail}
+                    onChange={(e) => setNewOrdEmail(e.target.value)}
+                    placeholder="client@company.com"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">
+                    Company (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newOrdCompany}
+                    onChange={(e) => setNewOrdCompany(e.target.value)}
+                    placeholder="Acme Corp Pvt Ltd"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-slate-600 mb-1">Product *</label>
+                  <select
+                    value={newOrdProductId}
+                    onChange={(e) => setNewOrdProductId(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                  >
+                    {PRODUCTS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} (₹{p.basePrice}/pc)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-600 mb-1">Quantity *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={newOrdQty}
+                    onChange={(e) => setNewOrdQty(Number(e.target.value) || 1)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] font-mono focus:border-[#FF7900] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-600 mb-1">Payment Plan</label>
+                <select
+                  value={newOrdPaymentPlan}
+                  onChange={(e) => setNewOrdPaymentPlan(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                >
+                  <option value="Full Prepaid (100% Online)">Full Prepaid (100% Online)</option>
+                  <option value="Partial Payment (50% Advance)">Partial Payment (50% Advance)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-600 mb-1">
+                  Delivery Address &amp; Pincode
+                </label>
+                <input
+                  type="text"
+                  value={newOrdAddress}
+                  onChange={(e) => setNewOrdAddress(e.target.value)}
+                  placeholder="Street, City, State - 500001"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-600 mb-1">
+                  Print Instructions / Notes
+                </label>
+                <textarea
+                  rows={2}
+                  value={newOrdNotes}
+                  onChange={(e) => setNewOrdNotes(e.target.value)}
+                  placeholder="Logo size, print placement, special requests..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateOrderOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingNewOrder}
+                  className="px-5 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {submittingNewOrder ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4" />
+                  )}
+                  <span>{submittingNewOrder ? 'Saving...' : 'Create Order'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* SLIDE-OVER ORDER INSPECTOR DRAWER */}
@@ -2736,10 +2765,10 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
       {inspectingOrder && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div
-            className="fixed inset-0 bg-black/75 backdrop-blur-xs"
+            className="fixed inset-0 bg-[#071B35]/55 backdrop-blur-xs"
             onClick={() => setInspectingOrder(null)}
           />
-          <div className="relative w-full max-w-2xl bg-[#121318] border-l border-white/[0.08] h-full overflow-y-auto z-10 flex flex-col">
+          <div className="relative w-full max-w-2xl bg-white border-l border-slate-200 h-full overflow-y-auto z-10 flex flex-col shadow-2xl animate-admin-slide-right">
             {(() => {
               const { product, unitPrice, subtotal, gst, total } = getOrderEstimates(inspectingOrder);
               const parsed = parseOrderNotes(inspectingOrder.custom_notes);
@@ -2749,36 +2778,34 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
 
               return (
                 <>
-                  {/* Drawer Header */}
-                  <div className="sticky top-0 bg-[#121318]/95 backdrop-blur-md border-b border-white/[0.08] px-5 sm:px-6 py-4 flex items-center justify-between gap-3 z-10">
+                  <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-200 px-5 sm:px-6 py-4 flex items-center justify-between gap-3 z-10">
                     <div>
                       <div className="flex items-center gap-2 text-xs font-mono">
-                        <span className="text-[#FF7A00] font-bold">
+                        <span className="text-[#FF7900] font-bold">
                           #{formatOrderRef(inspectingOrder.id)}
                         </span>
-                        <span className="text-zinc-600">·</span>
-                        <span className="text-zinc-400">
+                        <span className="text-slate-300">·</span>
+                        <span className="text-slate-500">
                           {new Date(inspectingOrder.created_at).toLocaleString('en-IN')}
                         </span>
                       </div>
-                      <h2 className="font-display font-bold text-lg text-white mt-0.5">
+                      <h2 className="font-display font-bold text-lg text-[#071B35] mt-0.5">
                         {inspectingOrder.customer_name}
                         {inspectingOrder.company ? ` — ${inspectingOrder.company}` : ''}
                       </h2>
                     </div>
                     <button
                       onClick={() => setInspectingOrder(null)}
-                      className="p-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-300 hover:text-white cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
+                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-[#071B35] cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
                     >
                       <X className="w-5 h-5" />
                     </button>
                   </div>
 
-                  {/* Drawer Body */}
                   <div className="p-5 sm:p-6 space-y-6 text-xs">
-                    {/* 1. 5-Stage Pipeline Control */}
+                    {/* 5-Stage Pipeline */}
                     <div className="space-y-2">
-                      <div className="text-[11px] font-medium text-zinc-400">
+                      <div className="text-[11px] font-semibold text-slate-500">
                         Update Production Stage
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
@@ -2789,8 +2816,8 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                             onClick={() => handleStatusChange(inspectingOrder.id, st)}
                             className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold cursor-pointer transition-colors ${
                               inspectingOrder.status === st
-                                ? 'bg-[#FF7A00] border-[#FF7A00] text-white'
-                                : 'bg-[#0A0B0E] border-white/[0.08] text-zinc-400 hover:text-white'
+                                ? 'bg-[#FF7900] border-[#FF7900] text-white'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-[#071B35]'
                             }`}
                           >
                             {STATUS_META[st].label}
@@ -2799,27 +2826,27 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       </div>
                     </div>
 
-                    {/* 2. Artwork & Placed Product Mockups */}
-                    <div className="space-y-3 pt-2 border-t border-white/[0.07]">
-                      <div className="text-[11px] font-medium text-zinc-400">
+                    {/* Artwork & Placed Product Mockups */}
+                    <div className="space-y-3 pt-2 border-t border-slate-100">
+                      <div className="text-[11px] font-semibold text-slate-500">
                         Artwork &amp; Product Placement Files
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {[
-                          { label: 'Client Raw Logo', url: inspectingOrder.logo_url, bg: 'bg-[#0A0B0E]' },
-                          { label: 'Front Placed Mockup', url: parsed.frontMockupUrl, bg: 'bg-slate-100' },
-                          { label: 'Back Placed Mockup', url: parsed.backMockupUrl, bg: 'bg-slate-100' },
-                          { label: 'Back Raw Logo', url: parsed.backLogoUrl, bg: 'bg-[#0A0B0E]' },
+                          { label: 'Client Raw Logo', url: inspectingOrder.logo_url },
+                          { label: 'Front Placed Mockup', url: parsed.frontMockupUrl },
+                          { label: 'Back Placed Mockup', url: parsed.backMockupUrl },
+                          { label: 'Back Raw Logo', url: parsed.backLogoUrl },
                         ]
                           .filter((asset) => Boolean(asset.url))
                           .map((asset) => (
                             <div
                               key={asset.label}
-                              className="bg-[#0A0B0E] border border-white/[0.08] rounded-xl p-2.5 space-y-2"
+                              className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2"
                             >
                               <button
                                 onClick={() => setPreviewLogoUrl(asset.url!)}
-                                className={`w-full h-28 rounded-lg ${asset.bg} flex items-center justify-center p-1 overflow-hidden cursor-zoom-in`}
+                                className="w-full h-28 rounded-lg bg-white border border-slate-100 flex items-center justify-center p-1 overflow-hidden cursor-zoom-in"
                               >
                                 <img
                                   src={asset.url!}
@@ -2828,7 +2855,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                                 />
                               </button>
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] text-zinc-300 truncate">
+                                <span className="text-[11px] text-slate-600 truncate">
                                   {asset.label}
                                 </span>
                                 <a
@@ -2836,7 +2863,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   download
-                                  className="text-[#FF7A00] hover:underline text-[11px] shrink-0"
+                                  className="text-[#FF7900] font-semibold hover:underline text-[11px] shrink-0"
                                 >
                                   Save
                                 </a>
@@ -2844,87 +2871,93 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                             </div>
                           ))}
                         {!inspectingOrder.logo_url && !parsed.frontMockupUrl && (
-                          <div className="col-span-full py-6 text-center bg-[#0A0B0E] rounded-xl border border-white/[0.06] text-zinc-500">
+                          <div className="col-span-full py-6 text-center bg-slate-50 rounded-xl border border-slate-200 text-slate-500">
                             No custom logo or mockup uploaded for this order.
                           </div>
                         )}
                       </div>
                     </div>
 
-                    {/* 3. Production Specs & Customer Info */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/[0.07]">
+                    {/* Production Specs & Client Info */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
                       <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-zinc-400">
+                        <div className="text-[11px] font-semibold text-slate-500">
                           Product &amp; Print Specifications
                         </div>
-                        <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5 space-y-1.5">
-                          <div className="font-semibold text-white text-sm">
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5">
+                          <div className="font-bold text-[#071B35] text-sm">
                             {product?.name || inspectingOrder.product_id}
                           </div>
-                          <div className="text-zinc-300 font-mono tabular-nums">
+                          <div className="text-slate-700 font-mono tabular-nums">
                             {inspectingOrder.quantity} units × ₹{unitPrice} = ₹
                             {subtotal.toLocaleString('en-IN')}
                           </div>
-                          <div className="text-zinc-400">
+                          <div className="text-slate-600">
                             GST (18%): ₹{gst.toLocaleString('en-IN')} · Est. Total:{' '}
-                            <strong className="text-white">₹{total.toLocaleString('en-IN')}</strong>
+                            <strong className="text-[#071B35]">
+                              ₹{total.toLocaleString('en-IN')}
+                            </strong>
                           </div>
                           {parsed.color && (
-                            <div className="text-zinc-400">
-                              Color: <span className="text-zinc-200">{parsed.color}</span>
+                            <div className="text-slate-600">
+                              Color: <span className="text-[#071B35] font-medium">{parsed.color}</span>
                             </div>
                           )}
                           {parsed.size && (
-                            <div className="text-zinc-400">
-                              Size: <span className="text-zinc-200">{parsed.size}</span>
+                            <div className="text-slate-600">
+                              Size: <span className="text-[#071B35] font-medium">{parsed.size}</span>
                             </div>
                           )}
                           {parsed.method && (
-                            <div className="text-zinc-400">
-                              Method: <span className="text-zinc-200">{parsed.method}</span>
+                            <div className="text-slate-600">
+                              Method: <span className="text-[#071B35] font-medium">{parsed.method}</span>
                             </div>
                           )}
                           {parsed.placementSummary && (
-                            <div className="text-zinc-400 leading-relaxed pt-1 border-t border-white/[0.06]">
-                              Layout: <span className="text-zinc-200">{parsed.placementSummary}</span>
+                            <div className="text-slate-600 leading-relaxed pt-1 border-t border-slate-200">
+                              Layout: <span className="text-[#071B35]">{parsed.placementSummary}</span>
                             </div>
                           )}
                           {parsed.customNotesText && (
-                            <div className="text-zinc-400 leading-relaxed">
-                              Client Note: <span className="text-zinc-200">{parsed.customNotesText}</span>
+                            <div className="text-slate-600 leading-relaxed">
+                              Client Note: <span className="text-[#071B35]">{parsed.customNotesText}</span>
                             </div>
                           )}
                         </div>
                       </div>
 
                       <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-zinc-400">
+                        <div className="text-[11px] font-semibold text-slate-500">
                           Client, Billing &amp; Delivery Address
                         </div>
-                        <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5 space-y-2">
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="font-semibold text-white">{inspectingOrder.customer_name}</span>
+                            <span className="font-bold text-[#071B35]">
+                              {inspectingOrder.customer_name}
+                            </span>
                             <a
                               href={`tel:${inspectingOrder.phone}`}
-                              className="font-mono text-[#FF7A00] hover:underline"
+                              className="font-mono font-semibold text-[#FF7900] hover:underline"
                             >
                               {inspectingOrder.phone}
                             </a>
                           </div>
-                          <div className="text-zinc-400 truncate">{inspectingOrder.customer_email}</div>
+                          <div className="text-slate-600 truncate">
+                            {inspectingOrder.customer_email}
+                          </div>
                           {parsed.gstin && (
-                            <div className="font-mono text-zinc-300">GSTIN: {parsed.gstin}</div>
+                            <div className="font-mono text-[#071B35]">GSTIN: {parsed.gstin}</div>
                           )}
                           {parsed.parsedAddress.full && (
-                            <div className="pt-2 border-t border-white/[0.06] space-y-1">
-                              <div className="text-zinc-300 leading-relaxed">
+                            <div className="pt-2 border-t border-slate-200 space-y-1">
+                              <div className="text-slate-700 leading-relaxed">
                                 {parsed.parsedAddress.full}
                               </div>
                               <button
                                 onClick={() =>
                                   handleCopy(parsed.parsedAddress.full, inspectingOrder.id + '-addr')
                                 }
-                                className="text-[11px] text-[#FF7A00] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                className="text-[11px] font-semibold text-[#FF7900] hover:underline inline-flex items-center gap-1 cursor-pointer"
                               >
                                 {copiedId === inspectingOrder.id + '-addr' ? (
                                   <>
@@ -2941,12 +2974,12 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                             </div>
                           )}
                           {(parsed.paymentPlan || parsed.paidAmount) && (
-                            <div className="pt-2 border-t border-white/[0.06] space-y-0.5 font-mono">
+                            <div className="pt-2 border-t border-slate-200 space-y-0.5 font-mono">
                               {parsed.paymentPlan && (
-                                <div className="text-zinc-300">{parsed.paymentPlan}</div>
+                                <div className="text-[#071B35]">{parsed.paymentPlan}</div>
                               )}
                               {parsed.paidAmount && (
-                                <div className="text-emerald-400">
+                                <div className="text-emerald-700 font-semibold">
                                   Paid: ₹{parsed.paidAmount}
                                   {parsed.balanceDue && parsed.balanceDue !== '0'
                                     ? ` · Balance Due: ₹${parsed.balanceDue}`
@@ -2954,7 +2987,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                                 </div>
                               )}
                               {parsed.razorpayId && (
-                                <div className="text-[11px] text-zinc-400">
+                                <div className="text-[11px] text-slate-500">
                                   Razorpay ID: {parsed.razorpayId}
                                 </div>
                               )}
@@ -2964,11 +2997,11 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       </div>
                     </div>
 
-                    {/* 4. Action Buttons */}
-                    <div className="pt-4 border-t border-white/[0.07] flex flex-wrap items-center gap-2.5">
+                    {/* Action Buttons */}
+                    <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center gap-2.5">
                       <button
                         onClick={() => openDispatchModalForOrder(inspectingOrder)}
-                        className="px-4 py-2.5 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white font-semibold flex items-center gap-1.5 cursor-pointer"
+                        className="px-4 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white font-semibold flex items-center gap-1.5 cursor-pointer"
                       >
                         <Truck className="w-4 h-4" />
                         <span>{hasRealAwb ? 'Edit Delhivery / AWB' : 'Book Delhivery AWB'}</span>
@@ -2977,8 +3010,10 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       {hasRealAwb && (
                         <>
                           <button
-                            onClick={() => handleTrackDelhiveryOrder(inspectingOrder.tracking_number!)}
-                            className="px-3.5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-amber-300 font-semibold flex items-center gap-1.5 cursor-pointer"
+                            onClick={() =>
+                              handleTrackDelhiveryOrder(inspectingOrder.tracking_number!)
+                            }
+                            className="px-3.5 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold flex items-center gap-1.5 cursor-pointer"
                           >
                             <MapPin className="w-4 h-4" />
                             <span>Track Live</span>
@@ -2987,7 +3022,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                             href={getDelhiveryLabelUrl(inspectingOrder.tracking_number!)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="px-3.5 py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 font-semibold flex items-center gap-1.5"
+                            className="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1.5"
                           >
                             <Printer className="w-4 h-4" />
                             <span>Label PDF</span>
@@ -2998,17 +3033,19 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       <button
                         onClick={() => handleSendOrderConfirmationEmail(inspectingOrder)}
                         disabled={sendingEmailOrderId === inspectingOrder.id}
-                        className="px-3.5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium flex items-center gap-1.5 cursor-pointer"
+                        className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] font-medium flex items-center gap-1.5 cursor-pointer"
                       >
-                        <Mail className="w-4 h-4 text-[#FF7A00]" />
-                        <span>{sendingEmailOrderId === inspectingOrder.id ? 'Sending...' : 'Send Email'}</span>
+                        <Mail className="w-4 h-4 text-[#FF7900]" />
+                        <span>
+                          {sendingEmailOrderId === inspectingOrder.id ? 'Sending...' : 'Send Email'}
+                        </span>
                       </button>
 
                       <button
                         onClick={() => generateAdminOrderInvoicePdf(inspectingOrder, PRODUCTS)}
-                        className="px-3.5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium flex items-center gap-1.5 cursor-pointer"
+                        className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] font-medium flex items-center gap-1.5 cursor-pointer"
                       >
-                        <Download className="w-4 h-4 text-emerald-400" />
+                        <Download className="w-4 h-4 text-emerald-600" />
                         <span>Invoice PDF</span>
                       </button>
 
@@ -3032,8 +3069,10 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
 
                       {onNavigateToOrderTracking && (
                         <button
-                          onClick={() => onNavigateToOrderTracking(formatOrderRef(inspectingOrder.id))}
-                          className="px-3.5 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium flex items-center gap-1.5 cursor-pointer"
+                          onClick={() =>
+                            onNavigateToOrderTracking(formatOrderRef(inspectingOrder.id))
+                          }
+                          className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] font-medium flex items-center gap-1.5 cursor-pointer"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                           <span>Customer View</span>
@@ -3052,32 +3091,31 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
       {/* MODAL: DELHIVERY MANIFEST BOOKING & COURIER DISPATCH EDITOR */}
       {/* ===================================================================== */}
       {editingDispatchOrder && (
-        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#121318] border border-white/[0.12] rounded-2xl p-6 max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+        <div className="fixed inset-0 z-[60] bg-[#071B35]/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-5 animate-admin-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <Truck className="w-5 h-5 text-[#FF7A00]" />
-                <h3 className="font-display font-bold text-white text-base">
+                <Truck className="w-5 h-5 text-[#FF7900]" />
+                <h3 className="font-display font-bold text-[#071B35] text-base">
                   Book Delhivery Shipment / Edit AWB
                 </h3>
               </div>
               <button
                 onClick={() => setEditingDispatchOrder(null)}
-                className="text-zinc-400 hover:text-white p-1.5 cursor-pointer"
+                className="text-slate-400 hover:text-[#071B35] p-1.5 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Section 1: 1-Click Book Delhivery Shipment (Prepaid) */}
-            <div className="bg-[#0A0B0E] border border-[#FF7A00]/30 rounded-2xl p-4 space-y-3 text-xs">
+            <div className="bg-orange-50/70 border border-orange-200 rounded-2xl p-4 space-y-3 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-[#FF7A00]">
+                <span className="font-bold text-[#FF7900]">
                   Delhivery One Live Manifest (Prepaid · No COD)
                 </span>
                 <span
-                  className={`text-[11px] font-mono ${
-                    delhiveryStatus?.configured ? 'text-emerald-400' : 'text-amber-400'
+                  className={`text-[11px] font-mono font-semibold ${
+                    delhiveryStatus?.configured ? 'text-emerald-700' : 'text-amber-700'
                   }`}
                 >
                   {delhiveryStatus?.configured ? 'API Active' : 'Set DELHIVERY_API_TOKEN'}
@@ -3085,7 +3123,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
               </div>
 
               <div>
-                <label className="block text-zinc-400 mb-1.5 text-[11px]">
+                <label className="block text-slate-600 font-medium mb-1.5 text-[11px]">
                   Select Pickup Warehouse Facility
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -3099,12 +3137,12 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       onClick={() => setDelhiveryPickup(wh.name)}
                       className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                         delhiveryPickup === wh.name
-                          ? 'border-[#FF7A00] bg-[#FF7A00]/15 text-white'
-                          : 'border-white/[0.08] bg-[#121318] text-zinc-400 hover:text-white'
+                          ? 'border-[#FF7900] bg-white text-[#071B35] shadow-xs'
+                          : 'border-slate-200 bg-white/60 text-slate-600 hover:text-[#071B35]'
                       }`}
                     >
-                      <div className="font-semibold">{wh.name}</div>
-                      <div className="text-[11px] font-mono opacity-80">{wh.sub}</div>
+                      <div className="font-bold">{wh.name}</div>
+                      <div className="text-[11px] font-mono text-slate-500">{wh.sub}</div>
                     </button>
                   ))}
                 </div>
@@ -3112,7 +3150,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div className="sm:col-span-2">
-                  <label className="block text-zinc-400 mb-1 text-[11px]">
+                  <label className="block text-slate-600 mb-1 text-[11px]">
                     Delivery Street Address
                   </label>
                   <input
@@ -3120,29 +3158,29 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                     value={shipAddress}
                     onChange={(e) => setShipAddress(e.target.value)}
                     placeholder="Plot / Tower / Street..."
-                    className="w-full bg-[#121318] border border-white/[0.1] rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] outline-none focus:border-[#FF7900]"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1 text-[11px]">City</label>
+                  <label className="block text-slate-600 mb-1 text-[11px]">City</label>
                   <input
                     type="text"
                     value={shipCity}
                     onChange={(e) => setShipCity(e.target.value)}
-                    className="w-full bg-[#121318] border border-white/[0.1] rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] outline-none focus:border-[#FF7900]"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1 text-[11px]">State</label>
+                  <label className="block text-slate-600 mb-1 text-[11px]">State</label>
                   <input
                     type="text"
                     value={shipState}
                     onChange={(e) => setShipState(e.target.value)}
-                    className="w-full bg-[#121318] border border-white/[0.1] rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] outline-none focus:border-[#FF7900]"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1 text-[11px]">
+                  <label className="block text-slate-600 mb-1 text-[11px]">
                     Delivery Pincode (6 digits)
                   </label>
                   <input
@@ -3150,11 +3188,11 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                     maxLength={6}
                     value={shipPincode}
                     onChange={(e) => setShipPincode(e.target.value.replace(/[^0-9]/g, ''))}
-                    className="w-full bg-[#121318] border border-white/[0.1] rounded-xl py-2 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] font-mono outline-none focus:border-[#FF7900]"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1 text-[11px]">
+                  <label className="block text-slate-600 mb-1 text-[11px]">
                     Package Weight (grams)
                   </label>
                   <input
@@ -3162,13 +3200,13 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                     min={100}
                     value={shipWeight}
                     onChange={(e) => setShipWeight(e.target.value)}
-                    className="w-full bg-[#121318] border border-white/[0.1] rounded-xl py-2 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-[#071B35] font-mono outline-none focus:border-[#FF7900]"
                   />
                 </div>
               </div>
 
               {shipmentError && (
-                <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-[11px]">
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px]">
                   {shipmentError}
                 </div>
               )}
@@ -3177,7 +3215,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                 type="button"
                 onClick={handleBookDelhiveryShipment}
                 disabled={creatingShipment}
-                className="w-full py-2.5 px-4 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="w-full py-2.5 px-4 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {creatingShipment ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -3192,9 +3230,11 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
               </button>
             </div>
 
-            {/* Section 2: Manual Waybill Assignment */}
-            <form onSubmit={handleSaveDispatch} className="space-y-4 text-xs pt-2 border-t border-white/[0.08]">
-              <div className="text-zinc-400 font-medium">Manual Courier &amp; Waybill Assignment</div>
+            <form
+              onSubmit={handleSaveDispatch}
+              className="space-y-4 text-xs pt-2 border-t border-slate-100"
+            >
+              <div className="text-slate-600 font-semibold">Manual Courier &amp; Waybill Assignment</div>
               <div>
                 <div className="grid grid-cols-2 gap-2 mb-2">
                   {[
@@ -3209,8 +3249,8 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                       onClick={() => setCourierInput(partner)}
                       className={`py-2 px-2 rounded-xl border text-center transition-colors cursor-pointer truncate ${
                         courierInput === partner
-                          ? 'border-[#FF7A00] bg-[#FF7A00]/15 text-[#FF7A00] font-semibold'
-                          : 'border-white/[0.08] bg-[#0A0B0E] text-zinc-400 hover:text-white'
+                          ? 'border-[#FF7900] bg-orange-50 text-[#FF7900] font-semibold'
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:text-[#071B35]'
                       }`}
                     >
                       {partner}
@@ -3223,12 +3263,12 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                   placeholder="Courier name..."
                   value={courierInput}
                   onChange={(e) => setCourierInput(e.target.value)}
-                  className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white focus:border-[#FF7A00] outline-none"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] focus:border-[#FF7900] outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-zinc-300 mb-1.5 font-medium">
+                <label className="block text-slate-600 mb-1.5 font-medium">
                   Tracking Number / AWB
                 </label>
                 <input
@@ -3237,7 +3277,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                   placeholder="e.g. 1492819201928"
                   value={awbInput}
                   onChange={(e) => setAwbInput(e.target.value)}
-                  className="w-full bg-[#0A0B0E] border border-white/[0.1] rounded-xl py-2.5 px-3 text-white font-mono focus:border-[#FF7A00] outline-none"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-[#071B35] font-mono focus:border-[#FF7900] outline-none"
                 />
               </div>
 
@@ -3245,14 +3285,14 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                 <button
                   type="button"
                   onClick={() => setEditingDispatchOrder(null)}
-                  className="px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#071B35] font-medium cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={updatingOrderId === editingDispatchOrder.id}
-                  className="px-5 py-2 rounded-xl bg-white text-black hover:bg-zinc-200 font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-[#071B35] text-white hover:bg-[#0d2a52] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Save Manual AWB</span>
@@ -3267,44 +3307,44 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
       {/* MODAL: LIVE DELHIVERY TRACKING */}
       {/* ===================================================================== */}
       {trackingOrderAwb && (
-        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#121318] border border-white/[0.12] rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+        <div className="fixed inset-0 z-[60] bg-[#071B35]/65 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4 animate-admin-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-[#FF7A00]" />
-                <h3 className="font-display font-bold text-white text-base">
+                <MapPin className="w-5 h-5 text-[#FF7900]" />
+                <h3 className="font-display font-bold text-[#071B35] text-base">
                   Delhivery Tracking: {trackingOrderAwb}
                 </h3>
               </div>
               <button
                 onClick={() => setTrackingOrderAwb(null)}
-                className="text-zinc-400 hover:text-white p-1.5 cursor-pointer"
+                className="text-slate-400 hover:text-[#071B35] p-1.5 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {loadingTrack ? (
-              <div className="py-10 text-center text-xs text-zinc-400 flex flex-col items-center gap-2">
-                <Loader2 className="w-6 h-6 animate-spin text-[#FF7A00]" />
+              <div className="py-10 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#FF7900]" />
                 <span>Fetching live scans from Delhivery...</span>
               </div>
             ) : trackingModalData ? (
               <div className="space-y-3 text-xs">
-                <div className="p-3 rounded-xl bg-[#0A0B0E] border border-white/[0.08] flex items-center justify-between">
-                  <span className="text-zinc-400">Current Status:</span>
-                  <span className="font-bold text-emerald-400 font-mono">
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                  <span className="text-slate-500">Current Status:</span>
+                  <span className="font-bold text-emerald-700 font-mono">
                     {trackingModalData.currentStatus ||
                       (trackingModalData.success ? 'Manifested' : 'Pending')}
                   </span>
                 </div>
                 {trackingModalData.statusLocation && (
-                  <div className="text-zinc-300 font-mono text-[11px]">
+                  <div className="text-slate-700 font-mono text-[11px]">
                     Hub Location: {trackingModalData.statusLocation}
                   </div>
                 )}
                 {trackingModalData.message && !trackingModalData.success && (
-                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300">
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800">
                     {trackingModalData.message}
                   </div>
                 )}
@@ -3313,11 +3353,11 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                     {trackingModalData.scans.map((scan, idx) => (
                       <div
                         key={idx}
-                        className="p-2.5 rounded-xl bg-[#0A0B0E] border border-white/[0.06] space-y-0.5"
+                        className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-0.5"
                       >
-                        <div className="font-semibold text-white">{scan.status}</div>
-                        <div className="text-[11px] text-zinc-400">{scan.location}</div>
-                        <div className="text-[10px] font-mono text-zinc-500">{scan.time}</div>
+                        <div className="font-semibold text-[#071B35]">{scan.status}</div>
+                        <div className="text-[11px] text-slate-500">{scan.location}</div>
+                        <div className="text-[10px] font-mono text-slate-400">{scan.time}</div>
                       </div>
                     ))}
                   </div>
@@ -3332,21 +3372,21 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
       {/* MODAL: FULL RESOLUTION LOGO & MOCKUP PREVIEW */}
       {/* ===================================================================== */}
       {previewLogoUrl && (
-        <div className="fixed inset-0 z-[70] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121318] border border-white/[0.12] rounded-2xl p-6 max-w-2xl w-full shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-              <h3 className="font-display font-bold text-white text-base">
+        <div className="fixed inset-0 z-[70] bg-[#071B35]/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-2xl w-full shadow-2xl space-y-4 animate-admin-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-display font-bold text-[#071B35] text-base">
                 Artwork &amp; Product Placement Preview
               </h3>
               <button
                 onClick={() => setPreviewLogoUrl(null)}
-                className="text-zinc-400 hover:text-white p-1.5 cursor-pointer"
+                className="text-slate-400 hover:text-[#071B35] p-1.5 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 bg-[#0A0B0E] rounded-xl border border-white/[0.08] flex items-center justify-center max-h-[60vh] overflow-hidden">
+            <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-center max-h-[60vh] overflow-hidden">
               <img
                 src={previewLogoUrl}
                 alt="High-resolution client artwork"
@@ -3355,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
             </div>
 
             <div className="flex items-center justify-between pt-2 gap-3">
-              <span className="text-xs font-mono text-zinc-400 truncate max-w-sm">
+              <span className="text-xs font-mono text-slate-500 truncate max-w-sm">
                 {previewLogoUrl}
               </span>
               <a
@@ -3363,7 +3403,7 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
                 target="_blank"
                 rel="noopener noreferrer"
                 download
-                className="px-4 py-2 rounded-xl bg-[#FF7A00] hover:bg-[#e86e00] text-white text-xs font-semibold flex items-center gap-2 shrink-0"
+                className="px-4 py-2 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-semibold flex items-center gap-2 shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Asset</span>
@@ -3375,7 +3415,3 @@ CREATE TABLE IF NOT EXISTS public.custom_orders (
     </div>
   );
 };
-
-function ArrowRightIcon() {
-  return <ChevronRight className="w-3.5 h-3.5" />;
-}
