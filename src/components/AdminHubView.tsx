@@ -33,7 +33,11 @@ import {
   FileText,
   UserCheck,
   Send,
-  HelpCircle
+  HelpCircle,
+  CreditCard,
+  MapPin,
+  Printer,
+  Loader2
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { 
@@ -49,6 +53,19 @@ import {
   markCheckoutRecovered 
 } from '../services/supabaseService';
 import { sendOrderConfirmationEmail, getSmtpStatus, sendTestEmail, SmtpStatusResponse } from '../services/emailService';
+import {
+  getRazorpayStatus,
+  getDelhiveryStatus,
+  checkDelhiveryPincode,
+  createDelhiveryShipment,
+  trackDelhiveryWaybill,
+  requestDelhiveryPickup,
+  getDelhiveryLabelUrl,
+  RazorpayStatus,
+  DelhiveryStatus,
+  DelhiveryTrackResponse,
+  DelhiveryPincodeCheckResult,
+} from '../services/paymentAndLogisticsService';
 import { generateAdminOrderInvoicePdf } from '../utils/pdfGenerator';
 import { getDirectClientWhatsAppUrl } from '../utils/whatsapp';
 import { PRODUCTS } from '../data/mockData';
@@ -95,15 +112,35 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   // Modals & Previews
   const [previewLogoUrl, setPreviewLogoUrl] = useState<string | null>(null);
   const [editingDispatchOrder, setEditingDispatchOrder] = useState<CustomOrderRow | null>(null);
-  const [courierInput, setCourierInput] = useState<string>('Blue Dart Apex Express');
+  const [courierInput, setCourierInput] = useState<string>('Delhivery (Teqqnoworld)');
   const [awbInput, setAwbInput] = useState<string>('');
+  const [delhiveryPickup, setDelhiveryPickup] = useState<string>('Teqqnoworld');
+  const [shipAddress, setShipAddress] = useState<string>('');
+  const [shipCity, setShipCity] = useState<string>('');
+  const [shipState, setShipState] = useState<string>('');
+  const [shipPincode, setShipPincode] = useState<string>('');
+  const [shipWeight, setShipWeight] = useState<string>('500');
+  const [creatingShipment, setCreatingShipment] = useState<boolean>(false);
+  const [shipmentError, setShipmentError] = useState<string | null>(null);
+  const [trackingModalData, setTrackingModalData] = useState<DelhiveryTrackResponse | null>(null);
+  const [trackingOrderAwb, setTrackingOrderAwb] = useState<string | null>(null);
+  const [loadingTrack, setLoadingTrack] = useState<boolean>(false);
+
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
   const [sendingEmailOrderId, setSendingEmailOrderId] = useState<string | null>(null);
   const [smtpStatus, setSmtpStatus] = useState<SmtpStatusResponse | null>(null);
+  const [razorpayStatus, setRazorpayStatus] = useState<RazorpayStatus | null>(null);
+  const [delhiveryStatus, setDelhiveryStatus] = useState<DelhiveryStatus | null>(null);
   const [testEmailInput, setTestEmailInput] = useState<string>('teqqnoworld@gmail.com');
   const [testingSmtp, setTestingSmtp] = useState<boolean>(false);
   const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testPinInput, setTestPinInput] = useState<string>('502032');
+  const [testingPin, setTestingPin] = useState<boolean>(false);
+  const [testPinResult, setTestPinResult] = useState<DelhiveryPincodeCheckResult | null>(null);
+  const [diagPickupName, setDiagPickupName] = useState<string>('Teqqnoworld');
+  const [schedulingPickup, setSchedulingPickup] = useState<boolean>(false);
+  const [pickupResult, setPickupResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Data Fetching
   const loadData = async () => {
@@ -111,15 +148,19 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setLoadingLeads(true);
 
     try {
-      const [ordersRes, leadsRes, smtpRes] = await Promise.all([
+      const [ordersRes, leadsRes, smtpRes, rzpRes, dlvRes] = await Promise.all([
         fetchCustomOrdersFromSupabase(),
         fetchAbandonedCheckoutsFromSupabase(),
         getSmtpStatus(),
+        getRazorpayStatus(),
+        getDelhiveryStatus(),
       ]);
 
       setOrders(ordersRes.data || []);
       setAbandonedLeads(leadsRes.data || []);
       setSmtpStatus(smtpRes);
+      setRazorpayStatus(rzpRes);
+      setDelhiveryStatus(dlvRes);
     } catch (err) {
       console.error('[AdminHub Load Error]:', err);
     } finally {
@@ -136,6 +177,34 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       setSmtpTestResult({ success: res.success, message: res.message });
     } finally {
       setTestingSmtp(false);
+    }
+  };
+
+  const handleTestDelhiveryPin = async () => {
+    setTestingPin(true);
+    setTestPinResult(null);
+    try {
+      const res = await checkDelhiveryPincode(testPinInput);
+      setTestPinResult(res);
+    } finally {
+      setTestingPin(false);
+    }
+  };
+
+  const handleScheduleDiagPickup = async () => {
+    setSchedulingPickup(true);
+    setPickupResult(null);
+    try {
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const res = await requestDelhiveryPickup({
+        pickupLocation: diagPickupName,
+        pickupDate: tomorrow,
+        pickupTime: '14:00:00',
+        expectedPackageCount: Math.max(1, orders.filter(o => o.status === 'dispatched').length || 1),
+      });
+      setPickupResult({ success: res.success, message: res.message });
+    } finally {
+      setSchedulingPickup(false);
     }
   };
 
@@ -243,6 +312,30 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     const frontMockupMatch = raw.match(/\[FrontMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
     const backMockupMatch = raw.match(/\[BackMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
     const backLogoMatch = raw.match(/\[BackLogo:\s*(https?:\/\/[^\s\]]+)\]/i);
+    const addrMatch = raw.match(/Address:\s*([^|]+)/i);
+    const paymentPlanMatch = raw.match(/Payment Plan:\s*([^|]+)/i);
+    const paidMatch = raw.match(/Paid:\s*₹([0-9,]+)\s*\|\s*Balance Due:\s*₹([0-9,]+)/i);
+    const rzpMatch = raw.match(/Razorpay ID:\s*([^|\s]+)/i);
+
+    let street = '';
+    let city = '';
+    let state = '';
+    let pincode = '';
+    if (addrMatch?.[1]) {
+      const addrStr = addrMatch[1].trim();
+      const pinSplit = addrStr.match(/-\s*(\d{6})\s*$/);
+      if (pinSplit) pincode = pinSplit[1];
+      const withoutPin = addrStr.replace(/-\s*\d{6}\s*$/, '').trim();
+      const parts = withoutPin.split(',').map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 3) {
+        state = parts[parts.length - 1];
+        city = parts[parts.length - 2];
+        street = parts.slice(0, parts.length - 2).join(', ');
+      } else {
+        street = withoutPin;
+      }
+    }
+
     const cleanNotes = raw
       .replace(/\|\s*\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
       .replace(/\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
@@ -251,8 +344,89 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       frontMockupUrl: frontMockupMatch?.[1] || null,
       backMockupUrl: backMockupMatch?.[1] || null,
       backLogoUrl: backLogoMatch?.[1] || null,
+      paymentPlan: paymentPlanMatch?.[1]?.trim() || null,
+      paidAmount: paidMatch?.[1] || null,
+      balanceDue: paidMatch?.[2] || null,
+      razorpayId: rzpMatch?.[1] || null,
+      parsedAddress: { street, city, state, pincode },
       cleanNotes,
     };
+  };
+
+  const openDispatchModalForOrder = (order: CustomOrderRow) => {
+    const parsed = parseOrderArtworkNotes(order.custom_notes);
+    setEditingDispatchOrder(order);
+    setCourierInput(order.courier_partner || `Delhivery (${delhiveryPickup})`);
+    setAwbInput(order.tracking_number || '');
+    setShipAddress(parsed.parsedAddress.street || '');
+    setShipCity(parsed.parsedAddress.city || '');
+    setShipState(parsed.parsedAddress.state || '');
+    setShipPincode(parsed.parsedAddress.pincode || '');
+    setShipmentError(null);
+  };
+
+  const handleBookDelhiveryShipment = async () => {
+    if (!editingDispatchOrder) return;
+    setCreatingShipment(true);
+    setShipmentError(null);
+    try {
+      const prod = PRODUCTS.find((p) => p.id === editingDispatchOrder.product_id);
+      const estimatedTotal = Math.round((prod?.basePrice || 250) * (editingDispatchOrder.quantity || 1) * 1.18);
+      const orderNum = editingDispatchOrder.id.startsWith('TQ-')
+        ? editingDispatchOrder.id
+        : `TQ-${editingDispatchOrder.id.slice(0, 8).toUpperCase()}`;
+
+      const res = await createDelhiveryShipment({
+        orderId: editingDispatchOrder.id,
+        orderNumber: orderNum,
+        pickupLocation: delhiveryPickup,
+        customerName: editingDispatchOrder.customer_name,
+        phone: editingDispatchOrder.phone,
+        address: shipAddress || `${shipCity}, ${shipState}`,
+        city: shipCity,
+        state: shipState,
+        pincode: shipPincode,
+        productDesc: prod?.name || 'Custom Printed Corporate Merchandise',
+        quantity: editingDispatchOrder.quantity || 1,
+        totalAmount: estimatedTotal,
+        weightGrams: Number(shipWeight) || 500,
+      });
+
+      if (!res.success || !res.waybill) {
+        setShipmentError(res.message || 'Delhivery API could not manifest shipment.');
+        return;
+      }
+
+      const partnerName = res.courierPartner || `Delhivery (${delhiveryPickup})`;
+      const waybill = res.waybill;
+      await updateCustomOrderStatus(editingDispatchOrder.id, 'dispatched', partnerName, waybill);
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === editingDispatchOrder.id
+            ? { ...o, status: 'dispatched', courier_partner: partnerName, tracking_number: waybill }
+            : o
+        )
+      );
+      setCourierInput(partnerName);
+      setAwbInput(waybill);
+      setUpdateSuccessToast(`Delhivery AWB ${waybill} booked from ${delhiveryPickup} warehouse!`);
+      setTimeout(() => setUpdateSuccessToast(null), 4000);
+      setEditingDispatchOrder(null);
+    } finally {
+      setCreatingShipment(false);
+    }
+  };
+
+  const handleTrackDelhiveryOrder = async (waybill: string) => {
+    setTrackingOrderAwb(waybill);
+    setLoadingTrack(true);
+    setTrackingModalData(null);
+    try {
+      const res = await trackDelhiveryWaybill(waybill);
+      setTrackingModalData(res);
+    } finally {
+      setLoadingTrack(false);
+    }
   };
 
   // Re-send / Send Order Confirmation Email via Hostinger SMTP
@@ -761,12 +935,29 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
                         {/* Order Amount & Quick Actions */}
                         <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <span className="text-[10px] text-zinc-500 font-mono block">Order Value (incl. GST)</span>
-                            <span className="text-sm font-bold font-mono text-emerald-400">
-                              ₹{estimatedTotal.toLocaleString('en-IN')}.00
-                            </span>
-                          </div>
+                          {(() => {
+                            const payInfo = parseOrderArtworkNotes(order.custom_notes);
+                            return (
+                              <div className="text-right">
+                                <span className="text-[10px] text-zinc-500 font-mono block">Order Value (incl. GST)</span>
+                                <span className="text-sm font-bold font-mono text-emerald-400">
+                                  ₹{estimatedTotal.toLocaleString('en-IN')}.00
+                                </span>
+                                {payInfo.paidAmount && (
+                                  <div className="flex flex-wrap justify-end gap-1 mt-0.5">
+                                    <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800/60">
+                                      Paid: ₹{payInfo.paidAmount}
+                                    </span>
+                                    {payInfo.balanceDue && payInfo.balanceDue !== '0' && (
+                                      <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-950/70 text-amber-300 border border-amber-800/60">
+                                        Due: ₹{payInfo.balanceDue}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {/* 1-Click WhatsApp Button */}
                           <a
@@ -945,12 +1136,12 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                             </div>
                           </div>
 
-                          {/* Courier Partner & Waybill Display / Edit */}
+                          {/* Courier Partner & Waybill Display / Delhivery Actions */}
                           <div className="pt-2 border-t border-zinc-800/80">
                             {order.tracking_number ? (
-                              <div className="space-y-1">
+                              <div className="space-y-1.5">
                                 <div className="text-[10px] text-zinc-400 font-mono truncate">
-                                  {order.courier_partner || 'Blue Dart Apex'}
+                                  {order.courier_partner || 'Delhivery Express'}
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-mono text-[#FF7A00] font-bold">
                                   <span>{order.tracking_number}</span>
@@ -962,28 +1153,38 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                     {copiedId === order.id + '-awb' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                                   </button>
                                 </div>
-                                <button
-                                  onClick={() => {
-                                    setEditingDispatchOrder(order);
-                                    setCourierInput(order.courier_partner || 'Blue Dart Apex Express');
-                                    setAwbInput(order.tracking_number || '');
-                                  }}
-                                  className="text-[10px] text-zinc-400 hover:text-white underline cursor-pointer"
-                                >
-                                  Edit Dispatch Details
-                                </button>
+                                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                                  <button
+                                    onClick={() => openDispatchModalForOrder(order)}
+                                    className="text-[10px] text-zinc-400 hover:text-white underline cursor-pointer"
+                                  >
+                                    Edit Dispatch
+                                  </button>
+                                  <button
+                                    onClick={() => handleTrackDelhiveryOrder(order.tracking_number!)}
+                                    className="text-[10px] text-amber-400 hover:text-amber-300 underline cursor-pointer inline-flex items-center gap-0.5"
+                                  >
+                                    <MapPin className="w-2.5 h-2.5" />
+                                    <span>Track</span>
+                                  </button>
+                                  <a
+                                    href={getDelhiveryLabelUrl(order.tracking_number)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[10px] text-emerald-400 hover:text-emerald-300 underline inline-flex items-center gap-0.5"
+                                  >
+                                    <Printer className="w-2.5 h-2.5" />
+                                    <span>Label PDF</span>
+                                  </a>
+                                </div>
                               </div>
                             ) : (
                               <button
-                                onClick={() => {
-                                  setEditingDispatchOrder(order);
-                                  setCourierInput('Blue Dart Apex Express');
-                                  setAwbInput(`BD-AIR-${Math.floor(1000000000 + Math.random() * 9000000000)}`);
-                                }}
-                                className="w-full text-center py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                                onClick={() => openDispatchModalForOrder(order)}
+                                className="w-full text-center py-1.5 px-2 bg-[#FF7A00]/15 hover:bg-[#FF7A00]/25 text-[#FF7A00] border border-[#FF7A00]/30 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                               >
-                                <Truck className="w-3 h-3 text-[#FF7A00]" />
-                                <span>Assign Courier & AWB</span>
+                                <Truck className="w-3 h-3" />
+                                <span>Ship via Delhivery / AWB</span>
                               </button>
                             )}
 
@@ -1532,6 +1733,124 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               )}
             </div>
 
+            {/* Razorpay Payment Gateway + Delhivery One Live Logistics Cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Razorpay Status Card */}
+              <div className="bg-[#16171B] border border-zinc-800 rounded-3xl p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-display font-bold text-base text-white flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-[#FF7A00]" />
+                    <span>Razorpay Payment Gateway</span>
+                  </h3>
+                  <span
+                    className={`px-3 py-1 rounded-full text-[11px] font-mono font-bold border ${
+                      razorpayStatus?.configured
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                    }`}
+                  >
+                    {razorpayStatus?.configured ? 'LIVE CONNECTED' : 'AWAITING API KEYS'}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Checkout accepts <strong className="text-white">100% Full Prepaid</strong> and{' '}
+                  <strong className="text-white">50% Partial Advance</strong> via Razorpay (Zero COD Policy). Set{' '}
+                  <code className="text-zinc-200">RAZORPAY_KEY_ID</code> &amp;{' '}
+                  <code className="text-zinc-200">RAZORPAY_KEY_SECRET</code> in Hostinger Environment Variables.
+                </p>
+                <div className="bg-black/40 border border-zinc-800 rounded-2xl p-3.5 text-xs">
+                  <div className="text-[10px] font-mono uppercase text-zinc-500">Active Key ID</div>
+                  <div className="font-mono text-zinc-200 mt-1">
+                    {razorpayStatus?.keyId || '(not set — sandbox fallback active)'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Delhivery One Logistics Card */}
+              <div className="bg-[#16171B] border border-zinc-800 rounded-3xl p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-display font-bold text-base text-white flex items-center gap-2">
+                    <Truck className="w-5 h-5 text-[#FF7A00]" />
+                    <span>Delhivery One Logistics (Prepaid)</span>
+                  </h3>
+                  <span
+                    className={`px-3 py-1 rounded-full text-[11px] font-mono font-bold border ${
+                      delhiveryStatus?.configured
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                    }`}
+                  >
+                    {delhiveryStatus?.configured ? 'LIVE API CONNECTED' : 'TOKEN MISSING'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {(delhiveryStatus?.pickups || [
+                    { name: 'Teqqnoworld', city: 'Hyderabad', state: 'Telangana', pin: '502032' },
+                    { name: 'Teqqnoworld 2', city: 'Hyderabad', state: 'Telangana', pin: '500090' },
+                  ]).map((wh) => (
+                    <div key={wh.name} className="bg-black/40 border border-zinc-800 rounded-xl p-2.5">
+                      <div className="font-bold text-white">{wh.name}</div>
+                      <div className="text-[11px] text-zinc-400 font-mono">
+                        {wh.city} · {wh.pin}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Live Pincode Serviceability Tester */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={testPinInput}
+                    onChange={(e) => setTestPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="6-digit pincode"
+                    className="w-36 bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-xs font-mono text-white outline-none focus:border-[#FF7A00]"
+                  />
+                  <button
+                    onClick={handleTestDelhiveryPin}
+                    disabled={testingPin}
+                    className="bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl cursor-pointer disabled:opacity-50"
+                  >
+                    {testingPin ? 'Checking...' : 'Check Pincode'}
+                  </button>
+                  <select
+                    value={diagPickupName}
+                    onChange={(e) => setDiagPickupName(e.target.value)}
+                    className="bg-black/60 border border-zinc-700 rounded-xl py-2 px-2.5 text-xs text-white outline-none"
+                  >
+                    <option value="Teqqnoworld">Teqqnoworld</option>
+                    <option value="Teqqnoworld 2">Teqqnoworld 2</option>
+                  </select>
+                  <button
+                    onClick={handleScheduleDiagPickup}
+                    disabled={schedulingPickup}
+                    className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-bold px-3.5 py-2 rounded-xl cursor-pointer disabled:opacity-50 ml-auto"
+                  >
+                    {schedulingPickup ? 'Scheduling...' : 'Request Pickup'}
+                  </button>
+                </div>
+
+                {testPinResult && (
+                  <div className="p-2.5 rounded-xl bg-black/50 border border-zinc-800 text-[11px] text-zinc-300 font-mono">
+                    {testPinResult.message}
+                  </div>
+                )}
+                {pickupResult && (
+                  <div
+                    className={`p-2.5 rounded-xl border text-xs ${
+                      pickupResult.success
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : 'bg-red-500/10 border-red-500/30 text-red-300'
+                    }`}
+                  >
+                    {pickupResult.message}
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="bg-[#16171B] border border-zinc-800 rounded-3xl p-6 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
@@ -1656,16 +1975,16 @@ CREATE POLICY "Public all abandoned_checkouts" ON public.abandoned_checkouts FOR
       </main>
 
       {/* ========================================================================= */}
-      {/* MODAL: COURIER & AWB DISPATCH EDITOR */}
+      {/* MODAL: DELHIVERY MANIFEST BOOKING & COURIER DISPATCH EDITOR */}
       {/* ========================================================================= */}
       {editingDispatchOrder && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#16171B] border border-zinc-700 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95 duration-150">
+          <div className="bg-[#16171B] border border-zinc-700 rounded-3xl p-6 max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-2xl space-y-5 animate-in zoom-in-95 duration-150">
             
             <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
               <div className="flex items-center gap-2">
                 <Truck className="w-5 h-5 text-[#FF7A00]" />
-                <h3 className="font-bold text-white text-base">Assign Courier & Waybill</h3>
+                <h3 className="font-bold text-white text-base">Book Delhivery Shipment / Edit Waybill</h3>
               </div>
               <button
                 onClick={() => setEditingDispatchOrder(null)}
@@ -1675,32 +1994,136 @@ CREATE POLICY "Public all abandoned_checkouts" ON public.abandoned_checkouts FOR
               </button>
             </div>
 
-            <form onSubmit={handleSaveDispatch} className="space-y-4 text-xs">
+            {/* Section 1: 1-Click Book Delhivery Shipment (Prepaid) */}
+            <div className="bg-black/40 border border-[#FF7A00]/30 rounded-2xl p-4 space-y-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-[#FF7A00] uppercase tracking-wider text-[11px] font-mono">
+                  1-Click Delhivery One Live Manifest (Prepaid · No COD)
+                </span>
+                <span
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                    delhiveryStatus?.configured ? 'bg-emerald-950 text-emerald-400' : 'bg-amber-950 text-amber-400'
+                  }`}
+                >
+                  {delhiveryStatus?.configured ? 'Token Active' : 'Set DELHIVERY_API_TOKEN'}
+                </span>
+              </div>
+
               <div>
-                <label className="block text-zinc-400 mb-1 font-mono">Order Reference</label>
-                <input
-                  type="text"
-                  disabled
-                  value={`#${editingDispatchOrder.id.slice(0, 8).toUpperCase()} · ${editingDispatchOrder.customer_name}`}
-                  className="w-full bg-black/60 border border-zinc-800 rounded-xl py-2 px-3 text-zinc-400 font-mono"
-                />
+                <label className="block text-zinc-400 mb-1 text-[11px]">Pickup Warehouse Facility</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { name: 'Teqqnoworld', sub: 'Hyderabad · 502032' },
+                    { name: 'Teqqnoworld 2', sub: 'Hyderabad · 500090' },
+                  ].map((wh) => (
+                    <button
+                      key={wh.name}
+                      type="button"
+                      onClick={() => setDelhiveryPickup(wh.name)}
+                      className={`p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                        delhiveryPickup === wh.name
+                          ? 'border-[#FF7A00] bg-[#FF7A00]/15 text-white'
+                          : 'border-zinc-800 bg-zinc-900/50 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <div className="font-bold">{wh.name}</div>
+                      <div className="text-[10px] font-mono opacity-80">{wh.sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="sm:col-span-2">
+                  <label className="block text-zinc-400 mb-1 text-[11px]">Delivery Street Address</label>
+                  <input
+                    type="text"
+                    value={shipAddress}
+                    onChange={(e) => setShipAddress(e.target.value)}
+                    placeholder="Plot / Tower / Street..."
+                    className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1 text-[11px]">City</label>
+                  <input
+                    type="text"
+                    value={shipCity}
+                    onChange={(e) => setShipCity(e.target.value)}
+                    className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1 text-[11px]">State</label>
+                  <input
+                    type="text"
+                    value={shipState}
+                    onChange={(e) => setShipState(e.target.value)}
+                    className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-white outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1 text-[11px]">Delivery Pincode (6 digits)</label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={shipPincode}
+                    onChange={(e) => setShipPincode(e.target.value.replace(/[^0-9]/g, ''))}
+                    className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1 text-[11px]">Package Weight (grams)</label>
+                  <input
+                    type="number"
+                    min={100}
+                    value={shipWeight}
+                    onChange={(e) => setShipWeight(e.target.value)}
+                    className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2 px-3 text-white font-mono outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+              </div>
+
+              {shipmentError && (
+                <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-[11px]">
+                  {shipmentError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleBookDelhiveryShipment}
+                disabled={creatingShipment}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#FF7A00] hover:bg-[#ff881a] text-white font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {creatingShipment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                <span>
+                  {creatingShipment ? 'Creating Delhivery Manifest...' : `Generate Live Delhivery AWB (${delhiveryPickup})`}
+                </span>
+              </button>
+            </div>
+
+            {/* Section 2: Manual / Fallback Courier & AWB Save */}
+            <form onSubmit={handleSaveDispatch} className="space-y-4 text-xs pt-2 border-t border-zinc-800">
+              <div className="text-[11px] font-mono uppercase text-zinc-400">
+                Manual Courier &amp; Waybill Assignment
               </div>
 
               <div>
                 <label className="block text-zinc-300 mb-1.5 font-bold">Courier Logistics Partner</label>
                 <div className="grid grid-cols-2 gap-2 mb-2">
-                  {['Blue Dart Apex Express', 'Delhivery Surface', 'DTDC Express Air', 'Xpressbees B2B'].map((partner) => (
+                  {['Delhivery (Teqqnoworld)', 'Delhivery (Teqqnoworld 2)', 'Blue Dart Apex Express', 'DTDC Express Air'].map((partner) => (
                     <button
                       key={partner}
                       type="button"
                       onClick={() => setCourierInput(partner)}
-                      className={`py-1.5 px-2 rounded-xl border text-center transition-all cursor-pointer ${
+                      className={`py-1.5 px-2 rounded-xl border text-center transition-all cursor-pointer truncate ${
                         courierInput === partner
                           ? 'border-[#FF7A00] bg-[#FF7A00]/15 text-[#FF7A00] font-bold'
                           : 'border-zinc-800 bg-black/40 text-zinc-400 hover:text-white'
                       }`}
                     >
-                      {partner.split(' ')[0]}
+                      {partner}
                     </button>
                   ))}
                 </div>
@@ -1719,14 +2142,11 @@ CREATE POLICY "Public all abandoned_checkouts" ON public.abandoned_checkouts FOR
                 <input
                   type="text"
                   required
-                  placeholder="e.g. BD-AIR-892019284"
+                  placeholder="e.g. 1492819201928"
                   value={awbInput}
                   onChange={(e) => setAwbInput(e.target.value)}
                   className="w-full bg-black/60 border border-zinc-700 rounded-xl py-2.5 px-3 text-white font-mono focus:border-[#FF7A00] outline-none"
                 />
-                <span className="text-[10px] text-zinc-500 font-mono mt-1 block">
-                  The client can track their consignment with this AWB instantly in the tracking modal.
-                </span>
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-2">
@@ -1740,14 +2160,73 @@ CREATE POLICY "Public all abandoned_checkouts" ON public.abandoned_checkouts FOR
                 <button
                   type="submit"
                   disabled={updatingOrderId === editingDispatchOrder.id}
-                  className="px-5 py-2 rounded-xl bg-[#FF7A00] hover:bg-[#ff881a] text-white font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-zinc-200 hover:bg-white text-black font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Mark Dispatched & Save</span>
+                  <span>Save Manual AWB</span>
                 </button>
               </div>
             </form>
 
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: LIVE DELHIVERY TRACKING */}
+      {/* ========================================================================= */}
+      {trackingOrderAwb && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#16171B] border border-zinc-700 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-[#FF7A00]" />
+                <h3 className="font-bold text-white text-base">Live Delhivery Tracking: {trackingOrderAwb}</h3>
+              </div>
+              <button
+                onClick={() => setTrackingOrderAwb(null)}
+                className="text-zinc-400 hover:text-white p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {loadingTrack ? (
+              <div className="py-10 text-center text-xs text-zinc-400 flex flex-col items-center gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#FF7A00]" />
+                <span>Fetching live scans from Delhivery...</span>
+              </div>
+            ) : trackingModalData ? (
+              <div className="space-y-3 text-xs">
+                <div className="p-3 rounded-xl bg-black/50 border border-zinc-800 flex items-center justify-between">
+                  <span className="text-zinc-400">Current Status:</span>
+                  <span className="font-bold text-emerald-400 font-mono">
+                    {trackingModalData.currentStatus || (trackingModalData.success ? 'Manifested' : 'Pending')}
+                  </span>
+                </div>
+                {trackingModalData.statusLocation && (
+                  <div className="text-zinc-300 font-mono text-[11px]">
+                    Hub Location: {trackingModalData.statusLocation}
+                  </div>
+                )}
+                {trackingModalData.message && !trackingModalData.success && (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300">
+                    {trackingModalData.message}
+                  </div>
+                )}
+                {trackingModalData.scans?.length > 0 && (
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {trackingModalData.scans.map((scan, idx) => (
+                      <div key={idx} className="p-2.5 rounded-xl bg-black/40 border border-zinc-800/80 space-y-0.5">
+                        <div className="font-bold text-white">{scan.status}</div>
+                        <div className="text-[11px] text-zinc-400">{scan.location}</div>
+                        <div className="text-[10px] font-mono text-zinc-500">{scan.time}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       )}

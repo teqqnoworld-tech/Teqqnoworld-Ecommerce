@@ -28,6 +28,9 @@ export interface OrderConfirmationEmailPayload {
   phone?: string;
   gstin?: string;
   paymentMode?: string;
+  amountPaid?: number;
+  balanceDue?: number;
+  razorpayPaymentId?: string;
   items: OrderEmailItem[];
   subtotal: number;
   gstAmount: number;

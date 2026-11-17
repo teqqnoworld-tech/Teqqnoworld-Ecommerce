@@ -453,7 +453,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
                       <Truck className="w-3.5 h-3.5 text-zinc-500" />
-                      <span>Track BlueDart Air</span>
+                      <span>Track Delhivery Express</span>
                     </button>
                   </div>
                 </div>
@@ -735,7 +735,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                               className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
                             >
                               <Truck className="w-3.5 h-3.5" />
-                              <span>Track BlueDart</span>
+                              <span>Track Delhivery</span>
                             </button>
 
                             <button
@@ -772,7 +772,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <div>
                   <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Live Consignment Milestone Tracker</h3>
                   <p className="text-xs text-zinc-500">
-                    Integrated with BlueDart Apex Express & Delhivery Surface for time-sensitive corporate shipments.
+                    Integrated with Delhivery One Express &amp; Surface for time-sensitive corporate shipments.
                   </p>
                 </div>
 
@@ -801,10 +801,10 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     <div className="p-4 rounded-xl bg-[#0B0B0D] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="space-y-1">
                         <div className="text-[11px] font-mono text-[#FF7A00] uppercase tracking-wider font-semibold">
-                          COURIER PARTNER: {selectedTrackOrder.courierPartner || 'BlueDart Apex Express'}
+                          COURIER PARTNER: {selectedTrackOrder.courierPartner || 'Delhivery Express'}
                         </div>
                         <div className="text-base font-mono font-bold flex items-center gap-2">
-                          <span>AWB: {selectedTrackOrder.trackingNumber || 'BD-AIR-8920194812'}</span>
+                          <span>AWB: {selectedTrackOrder.trackingNumber || 'Awaiting Manifest'}</span>
                           <button
                             onClick={() => handleCopy(selectedTrackOrder.trackingNumber || 'BD-AIR-8920194812')}
                             className="p-1 hover:text-[#FF7A00] text-zinc-400"
@@ -839,7 +839,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           { title: '2. Proof Signed', desc: 'Vector approved', done: true, time: 'Day 0 (+2h)' },
                           { title: '3. Machine Run', desc: 'DTF / Embroidery', done: true, time: 'Day 1' },
                           { title: '4. QC & Ironing', desc: 'Passed 10-pt check', done: true, time: 'Day 1' },
-                          { title: '5. Dispatched', desc: 'Handed to BlueDart', done: false, time: 'Day 2' },
+                          { title: '5. Dispatched', desc: 'Handed to Delhivery', done: false, time: 'Day 2' },
                           { title: '6. Delivered', desc: 'Signed at dock', done: false, time: 'Day 3' },
                         ].map((stage, idx) => (
                           <div 

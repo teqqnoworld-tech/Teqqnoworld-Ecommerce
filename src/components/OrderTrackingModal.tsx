@@ -128,9 +128,9 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
       'Artwork Verification',
     estimatedDispatch: new Date(Date.now() + 24 * 3600 * 1000).toISOString().split('T')[0],
     trackingNumber: liveSupabaseOrder.tracking_number || undefined,
-    courierPartner: liveSupabaseOrder.courier_partner || undefined,
-    paymentMode: 'Pay on Approval',
-    paymentStatus: 'Pending Verification',
+    courierPartner: liveSupabaseOrder.courier_partner || 'Delhivery Express',
+    paymentMode: 'Full Prepaid (100% Online)',
+    paymentStatus: 'Paid in Full (Razorpay)',
   } : null;
 
   const handleCopyAwb = (awb: string) => {
@@ -175,8 +175,8 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     },
     {
       id: 5,
-      title: 'Dispatched via BlueDart Apex Air',
-      desc: `Waybill AWB: ${activeOrder?.trackingNumber || 'BD-AIR-892019284'}`,
+      title: `Dispatched via ${activeOrder?.courierPartner || 'Delhivery Express'}`,
+      desc: `Waybill AWB: ${activeOrder?.trackingNumber || 'Awaiting Manifest'}`,
       timestamp: activeOrder?.orderStatus === 'Dispatched' || activeOrder?.orderStatus === 'Delivered' ? 'In Transit' : `Est. ${activeOrder?.estimatedDispatch}`,
       isCompleted: activeOrder?.orderStatus === 'Delivered',
       isCurrent: activeOrder?.orderStatus === 'Dispatched',
@@ -223,7 +223,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search by Order ID (e.g. TQ-89201) or BlueDart AWB Number..."
+              placeholder="Search by Order ID (e.g. TQ-89201) or Delhivery AWB Number..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 text-xs border border-zinc-300 rounded-xl outline-none focus:border-[#FF7A00]"
@@ -266,7 +266,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs font-bold text-white bg-zinc-800 px-2.5 py-1 rounded-lg">
-                    {activeOrder.courierPartner || 'BlueDart Apex Air'}
+                    {activeOrder.courierPartner || 'Delhivery Express'}
                   </span>
                   {activeOrder.trackingNumber && (
                     <button

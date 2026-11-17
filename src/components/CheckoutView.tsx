@@ -11,7 +11,10 @@ import {
   Lock,
   Truck,
   Sparkles,
-  Loader2
+  Loader2,
+  Wallet,
+  Percent,
+  MapPin
 } from 'lucide-react';
 import { CartItem, ShippingAddress, Order, UserProfile } from '../types';
 import { supabase } from '../lib/supabase';
@@ -21,6 +24,15 @@ import {
   markCheckoutRecovered 
 } from '../services/supabaseService';
 import { sendOrderConfirmationEmail, OrderEmailItem } from '../services/emailService';
+import {
+  getRazorpayStatus,
+  loadRazorpayCheckoutScript,
+  createRazorpayOrder,
+  verifyRazorpayPayment,
+  checkDelhiveryPincode,
+  RazorpayStatus,
+  DelhiveryPincodeCheckResult,
+} from '../services/paymentAndLogisticsService';
 import {
   describeArtworkPlacement,
   extractArtworkAssetsFromItem,
@@ -77,10 +89,14 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [billingState, setBillingState] = useState('Karnataka');
   const [billingPincode, setBillingPincode] = useState('560001');
 
-  // Payment Mode
+  // Payment Mode (100% Full Prepaid or 50% Partial Advance — NO COD)
   const [paymentMode, setPaymentMode] = useState<
-    'Test Gateway (Pre-Integration)' | 'Pay on Approval' | 'Corporate PO 30-Day'
-  >('Test Gateway (Pre-Integration)');
+    'Full Prepaid (100% Online)' | 'Partial Payment (50% Advance)'
+  >('Full Prepaid (100% Online)');
+
+  const [razorpayStatus, setRazorpayStatus] = useState<RazorpayStatus | null>(null);
+  const [pincodeStatus, setPincodeStatus] = useState<DelhiveryPincodeCheckResult | null>(null);
+  const [checkingPincode, setCheckingPincode] = useState(false);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
@@ -92,6 +108,36 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const gstRate = 0.18;
   const gstAmount = Math.round(subtotal * gstRate);
   const total = subtotal + shippingFee + gstAmount;
+  const halfAdvanceAmount = Math.round(total * 0.5);
+  const payableNow = paymentMode === 'Partial Payment (50% Advance)' ? halfAdvanceAmount : total;
+  const balanceDue = Math.max(0, total - payableNow);
+
+  useEffect(() => {
+    getRazorpayStatus().then(setRazorpayStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const cleanPin = pincode.replace(/[^0-9]/g, '');
+    if (cleanPin.length !== 6) {
+      setPincodeStatus(null);
+      return;
+    }
+    let cancelled = false;
+    setCheckingPincode(true);
+    const timer = setTimeout(() => {
+      checkDelhiveryPincode(cleanPin)
+        .then((res) => {
+          if (!cancelled) setPincodeStatus(res);
+        })
+        .finally(() => {
+          if (!cancelled) setCheckingPincode(false);
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pincode]);
 
   // GSTIN State Detection
   const stateCodeMap: Record<string, string> = {
@@ -169,6 +215,79 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     setUploadStepStatus('Initiating order processing...');
 
     try {
+      let razorpayOrderId: string | undefined;
+      let razorpayPaymentId: string | undefined;
+
+      // 0. If Razorpay live keys are configured on backend, collect 100% Prepaid or 50% Advance first
+      if (razorpayStatus?.configured) {
+        setUploadStepStatus('Opening Razorpay secure checkout...');
+        const scriptOk = await loadRazorpayCheckoutScript();
+        if (!scriptOk || !(window as any).Razorpay) {
+          throw new Error('Could not load Razorpay Checkout SDK. Check your internet connection.');
+        }
+
+        const rzpOrder = await createRazorpayOrder({
+          amountInr: payableNow,
+          totalOrderValue: total,
+          balanceDue,
+          paymentPlan: paymentMode === 'Partial Payment (50% Advance)' ? 'partial_50' : 'prepaid_100',
+          receipt: `TQ_${Date.now()}`,
+          customerName: fullName.trim(),
+          customerEmail: email.trim(),
+          customerPhone: phone.trim(),
+        });
+
+        if (!rzpOrder.success || !rzpOrder.orderId || !rzpOrder.keyId) {
+          throw new Error(rzpOrder.message || 'Unable to create Razorpay payment session.');
+        }
+
+        const rzpResponse = await new Promise<{
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }>((resolve, reject) => {
+          const rzpInstance = new (window as any).Razorpay({
+            key: rzpOrder.keyId,
+            amount: rzpOrder.amount,
+            currency: rzpOrder.currency || 'INR',
+            name: 'TeqqnoWorld',
+            description:
+              paymentMode === 'Partial Payment (50% Advance)'
+                ? `50% Advance (₹${payableNow.toLocaleString('en-IN')} of ₹${total.toLocaleString('en-IN')})`
+                : `100% Full Prepaid Order`,
+            order_id: rzpOrder.orderId,
+            prefill: {
+              name: fullName.trim(),
+              email: email.trim(),
+              contact: phone.replace(/[^0-9]/g, '').slice(-10),
+            },
+            notes: {
+              company: companyName || 'Direct',
+              payment_plan: paymentMode,
+              balance_due_before_dispatch: String(balanceDue),
+            },
+            theme: { color: '#FF7A00' },
+            modal: {
+              ondismiss: () => reject(new Error('Payment cancelled before completion. Your cart has been preserved.')),
+            },
+            handler: (resp: any) => resolve(resp),
+          });
+          rzpInstance.on('payment.failed', (failResp: any) => {
+            reject(new Error(failResp?.error?.description || 'Razorpay payment failed. Please try again.'));
+          });
+          rzpInstance.open();
+        });
+
+        setUploadStepStatus('Verifying Razorpay payment signature...');
+        const verifyRes = await verifyRazorpayPayment(rzpResponse);
+        if (!verifyRes.verified) {
+          throw new Error(verifyRes.message || 'Razorpay signature verification failed.');
+        }
+
+        razorpayOrderId = rzpResponse.razorpay_order_id;
+        razorpayPaymentId = rzpResponse.razorpay_payment_id;
+      }
+
       const insertedOrderIds: string[] = [];
       const emailItems: OrderEmailItem[] = [];
 
@@ -230,7 +349,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         if (poNumber) notesParts.push(`PO#: ${poNumber}`);
         if (isB2BInvoice && gstin) notesParts.push(`GSTIN: ${gstin}`);
         notesParts.push(`Address: ${street}, ${city}, ${state} - ${pincode}`);
-        notesParts.push(`Payment: ${paymentMode}`);
+        notesParts.push(`Payment Plan: ${paymentMode}`);
+        notesParts.push(`Paid: ₹${payableNow} | Balance Due: ₹${balanceDue}`);
+        if (razorpayPaymentId) {
+          notesParts.push(`Razorpay ID: ${razorpayPaymentId}`);
+        } else {
+          notesParts.push(`Gateway Mode: Sandbox (Awaiting Razorpay API Keys)`);
+        }
 
         // Attach structured URLs at end of custom_notes for Admin Hub multi-preview gallery
         if (frontMockupRes.publicUrl) notesParts.push(`[FrontMockup: ${frontMockupRes.publicUrl}]`);
@@ -322,10 +447,18 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         proofStatus: 'Proof Ready - Needs Approval',
         orderStatus: 'Artwork Verification',
         estimatedDispatch: new Date(Date.now() + 48 * 3600 * 1000).toISOString().split('T')[0],
-        trackingNumber: `BD-AIR-${Math.floor(1000000000 + Math.random() * 9000000000)}`,
-        courierPartner: 'BlueDart Apex Express',
+        trackingNumber: 'Awaiting Delhivery Manifest',
+        courierPartner: 'Delhivery Express (Prepaid)',
         paymentMode,
-        paymentStatus: paymentMode === 'Test Gateway (Pre-Integration)' ? 'Test Authenticated (Sandbox)' : 'Pending Verification',
+        paymentStatus: razorpayPaymentId
+          ? paymentMode === 'Partial Payment (50% Advance)'
+            ? '50% Advance Paid (Razorpay)'
+            : 'Paid in Full (Razorpay)'
+          : 'Test Authenticated (Sandbox)',
+        amountPaid: payableNow,
+        balanceDue,
+        razorpayOrderId,
+        razorpayPaymentId,
       };
 
       // CRO: Mark abandoned lead as recovered upon successful placement
@@ -347,12 +480,15 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         phone: phone.trim(),
         gstin: isB2BInvoice && gstin ? gstin.trim() : undefined,
         paymentMode,
+        amountPaid: payableNow,
+        balanceDue,
+        razorpayPaymentId,
         items: emailItems,
         subtotal,
         gstAmount,
         shippingFee,
         total,
-        estimatedDispatch: '24-48h Fast Dispatch',
+        estimatedDispatch: '24-48h Fast Dispatch via Delhivery',
         shippingAddress: {
           street,
           city,
@@ -679,57 +815,86 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   )}
                 </div>
 
-                <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
-                  <Truck className="w-3.5 h-3.5 text-[#FF7A00]" />
-                  <span>Estimated Courier Transit to {city}, {state}: 24–48 hours via BlueDart Air Express</span>
+                {/* Live Delhivery Pincode Serviceability & Logistics Info */}
+                <div className="rounded-xl p-3 bg-zinc-50 border border-zinc-200 text-[11px] flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-zinc-700">
+                    <Truck className="w-3.5 h-3.5 text-[#FF7A00] shrink-0" />
+                    <span>
+                      Dispatched from Hyderabad Facility via <strong>Delhivery Prepaid Express</strong> to {city}, {state}
+                    </span>
+                  </div>
+                  {checkingPincode ? (
+                    <span className="inline-flex items-center gap-1 text-zinc-500 font-mono">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Checking {pincode}...
+                    </span>
+                  ) : pincodeStatus ? (
+                    <span
+                      className={`inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded-full ${
+                        pincodeStatus.serviceable
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      <MapPin className="w-3 h-3" />
+                      {pincodeStatus.serviceable
+                        ? `${pincodeStatus.city || pincode}: Serviceable (${pincodeStatus.estimatedDays || '2-4 days'})`
+                        : `${pincode}: Non-serviceable`}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
 
-            {/* Step 3: Payment & Gateway Integration Transparent Notice */}
+            {/* Step 3: Razorpay Payment Plan (100% Prepaid or 50% Partial Advance — NO COD) */}
             <div className="bg-white rounded-2xl border border-[#E5E5EA] p-6 shadow-xs space-y-4">
-              <h3 className="font-display font-bold text-base text-[#0B0B0D] flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-[#FF7A00] text-white flex items-center justify-center text-xs">3</span>
-                <span>Payment Mode & Integration Status</span>
-              </h3>
-
-              {/* Explicit Integration Status Box per system instructions */}
-              <div className="bg-amber-50 rounded-xl p-4 border border-amber-200 text-xs text-amber-900 space-y-1.5">
-                <div className="font-bold flex items-center gap-1.5 text-amber-950">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Payment Gateway Integration Architecture Notice</span>
-                </div>
-                <p className="leading-relaxed text-[11px] text-amber-800">
-                  In production, live Indian online payments are processed through <strong>Razorpay / Cashfree / Stripe India</strong> webhooks using environment API keys. 
-                  This demonstration sandbox validates your custom artwork proofing workflow, records your order specifications, and dispatches it directly to the proof tracking pipeline without making real bank deductions.
-                </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-display font-bold text-base text-[#0B0B0D] flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-[#FF7A00] text-white flex items-center justify-center text-xs">3</span>
+                  <span>Online Payment Option (Prepaid / 50% Advance)</span>
+                </h3>
+                <span
+                  className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border ${
+                    razorpayStatus?.configured
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}
+                >
+                  {razorpayStatus?.configured ? '● RAZORPAY LIVE' : '● SANDBOX MODE (RAZORPAY READY)'}
+                </span>
               </div>
 
-              {/* Payment Methods */}
-              <div className="space-y-3 pt-2">
+              {!razorpayStatus?.configured && (
+                <div className="bg-amber-50 rounded-xl p-3.5 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed text-[11px] text-amber-800">
+                    Razorpay keys (<code>RAZORPAY_KEY_ID</code> / <code>RAZORPAY_KEY_SECRET</code>) are pending on the server.
+                    Your selected <strong>100% Prepaid</strong> or <strong>50% Partial Advance</strong> plan will still log your order & digital proof cleanly in Sandbox mode.
+                  </p>
+                </div>
+              )}
+
+              {/* Payment Methods (No COD) */}
+              <div className="space-y-3 pt-1">
                 {[
                   {
-                    id: 'Test Gateway (Pre-Integration)',
-                    title: 'Test Payment Gateway (Sandbox Simulation)',
-                    desc: 'Simulate instant UPI / Corporate NetBanking authentication. Safe demonstration.',
+                    id: 'Full Prepaid (100% Online)' as const,
+                    title: '100% Full Prepaid Online (Razorpay)',
+                    desc: `Pay full ₹${total.toLocaleString('en-IN')} today via UPI, Cards, or NetBanking. Zero balance due later & fastest factory priority.`,
+                    badge: `Pay ₹${total.toLocaleString('en-IN')} Now`,
                     icon: CreditCard,
                   },
                   {
-                    id: 'Pay on Approval',
-                    title: 'Pay After Digital Proof Approval',
-                    desc: 'Zero advance required today. Inspect your 1:1 scale visual proof before clearing payment.',
-                    icon: ShieldCheck,
-                  },
-                  {
-                    id: 'Corporate PO 30-Day',
-                    title: 'Corporate Purchase Order (30-Day Net Credit)',
-                    desc: 'Eligible for verified registered companies with valid GSTIN.',
-                    icon: Building2,
+                    id: 'Partial Payment (50% Advance)' as const,
+                    title: '50% Partial Advance Payment (Razorpay)',
+                    desc: `Pay 50% (₹${halfAdvanceAmount.toLocaleString('en-IN')}) now to confirm design proofing & start printing. Pay remaining ₹${(total - halfAdvanceAmount).toLocaleString('en-IN')} online before Delhivery dispatch.`,
+                    badge: `50% Now: ₹${halfAdvanceAmount.toLocaleString('en-IN')}`,
+                    icon: Percent,
                   },
                 ].map((mode) => (
                   <label
                     key={mode.id}
-                    className={`block p-3.5 rounded-xl border cursor-pointer transition-all ${
+                    className={`block p-4 rounded-xl border cursor-pointer transition-all ${
                       paymentMode === mode.id
                         ? 'border-[#FF7A00] bg-[#FF7A00]/5 ring-1 ring-[#FF7A00]'
                         : 'border-zinc-200 hover:border-zinc-300 bg-white'
@@ -740,19 +905,31 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                         type="radio"
                         name="paymentMode"
                         checked={paymentMode === mode.id}
-                        onChange={() => setPaymentMode(mode.id as any)}
+                        onChange={() => setPaymentMode(mode.id)}
                         className="mt-1 text-[#FF7A00] focus:ring-[#FF7A00]"
                       />
-                      <div className="flex-1">
-                        <div className="text-xs sm:text-sm font-semibold text-[#0B0B0D] flex items-center gap-2">
-                          <mode.icon className="w-4 h-4 text-[#FF7A00]" />
-                          <span>{mode.title}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs sm:text-sm font-semibold text-[#0B0B0D] flex items-center gap-2">
+                            <mode.icon className="w-4 h-4 text-[#FF7A00] shrink-0" />
+                            <span>{mode.title}</span>
+                          </div>
+                          <span className="text-[11px] font-mono font-bold text-[#FF7A00] bg-[#FF7A00]/10 px-2 py-0.5 rounded">
+                            {mode.badge}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-zinc-500 mt-0.5">{mode.desc}</p>
+                        <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">{mode.desc}</p>
                       </div>
                     </div>
                   </label>
                 ))}
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px] text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-xl px-3.5 py-2.5">
+                <Wallet className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+                <span>
+                  <strong>Prepaid Policy:</strong> Cash on Delivery (COD) is not available on custom branded merchandise. Choose either 100% Prepaid or 50% Advance to start production.
+                </span>
               </div>
 
             </div>
@@ -803,9 +980,23 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   <span>GST (18% ITC Credit):</span>
                   <span className="font-mono text-zinc-800">+₹{gstAmount.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="pt-3 border-t border-zinc-200 flex justify-between font-display font-bold text-lg text-[#0B0B0D]">
-                  <span>Total Payable:</span>
-                  <span className="text-[#FF7A00]">₹{total.toLocaleString('en-IN')}</span>
+                <div className="pt-3 border-t border-zinc-200 flex justify-between font-display font-bold text-base text-[#0B0B0D]">
+                  <span>Total Order Value:</span>
+                  <span className="font-mono">₹{total.toLocaleString('en-IN')}</span>
+                </div>
+
+                {/* Paid Now vs Balance Before Dispatch */}
+                <div className="bg-[#FAF9FD] border border-[#ECEAF3] rounded-xl p-3 space-y-1.5 mt-2">
+                  <div className="flex justify-between font-display font-bold text-base text-[#0B0B0D]">
+                    <span>{paymentMode === 'Partial Payment (50% Advance)' ? 'Pay 50% Advance Now:' : 'Payable Now (100% Prepaid):'}</span>
+                    <span className="text-[#FF7A00] font-mono">₹{payableNow.toLocaleString('en-IN')}</span>
+                  </div>
+                  {balanceDue > 0 && (
+                    <div className="flex justify-between text-[11px] text-amber-800 font-semibold">
+                      <span>Balance Before Dispatch (No COD):</span>
+                      <span className="font-mono">₹{balanceDue.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -818,12 +1009,18 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 {isProcessing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>{uploadStepStatus || 'Saving order to Supabase...'}</span>
+                    <span>{uploadStepStatus || 'Processing order...'}</span>
                   </>
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Submit Order & Open Proof Studio</span>
+                    <span>
+                      {razorpayStatus?.configured
+                        ? `Pay ₹${payableNow.toLocaleString('en-IN')} via Razorpay`
+                        : `Confirm Order (₹${payableNow.toLocaleString('en-IN')} ${
+                            paymentMode === 'Partial Payment (50% Advance)' ? '50% Advance' : 'Prepaid'
+                          })`}
+                    </span>
                   </>
                 )}
               </button>

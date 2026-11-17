@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -115,6 +116,9 @@ interface OrderConfirmationPayload {
   phone?: string;
   gstin?: string;
   paymentMode?: string;
+  amountPaid?: number;
+  balanceDue?: number;
+  razorpayPaymentId?: string;
   items: OrderItemPayload[];
   subtotal: number;
   gstAmount: number;
@@ -362,6 +366,11 @@ function generateAdminOrderAlertHtml(data: OrderConfirmationPayload, media: Prep
               <div style="font-size:11px; font-weight:800; letter-spacing:2px; color:#FF7A00; text-transform:uppercase;">TEQQNOWORLD ADMIN ALERT</div>
               <div style="font-size:22px; font-weight:800; color:#FFFFFF; margin-top:6px;">New Website Order Received: #${displayOrderNum}</div>
               <div style="font-size:13px; color:#D1D5DB; margin-top:4px;">Grand Total: <strong style="color:#1EBE5D;">₹${data.total.toLocaleString('en-IN')}.00</strong> • Payment: ${escapeHtml(data.paymentMode || 'Standard Checkout')}</div>
+              ${
+                typeof data.amountPaid === 'number'
+                  ? `<div style="font-size:12px; color:#E5E7EB; margin-top:6px;">Paid Online: <strong style="color:#1EBE5D;">₹${data.amountPaid.toLocaleString('en-IN')}.00</strong> • Balance Before Dispatch: <strong style="color:${(data.balanceDue || 0) > 0 ? '#FBBF24' : '#1EBE5D'};">₹${(data.balanceDue || 0).toLocaleString('en-IN')}.00</strong>${data.razorpayPaymentId ? ` • Razorpay ID: <span style="font-family:monospace;color:#FF7A00;">${escapeHtml(data.razorpayPaymentId)}</span>` : ''}</div>`
+                  : ''
+              }
             </td>
           </tr>
           <tr>
@@ -575,12 +584,36 @@ function generateOrderEmailHtml(data: OrderConfirmationPayload, media: PreparedO
                 </tr>
                 <tr>
                   <td style="padding: 14px 12px 6px 12px; font-size: 16px; font-weight: 800; color: #FFFFFF; border-top: 1px solid #2F313B;">
-                    Grand Total Paid:
+                    Order Total:
                   </td>
                   <td style="padding: 14px 12px 6px 12px; text-align: right; font-size: 18px; font-weight: 900; color: #FF7A00; font-family: monospace; border-top: 1px solid #2F313B;">
                     ₹${data.total.toLocaleString('en-IN')}.00
                   </td>
                 </tr>
+                ${
+                  typeof data.amountPaid === 'number'
+                    ? `<tr>
+                        <td style="padding: 4px 12px; font-size: 13px; color: #1EBE5D; font-weight: 700;">Paid Online (${escapeHtml(data.paymentMode || 'Prepaid')}):</td>
+                        <td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #1EBE5D; font-family: monospace; font-weight: 700;">₹${data.amountPaid.toLocaleString('en-IN')}.00</td>
+                      </tr>
+                      ${
+                        (data.balanceDue || 0) > 0
+                          ? `<tr>
+                              <td style="padding: 4px 12px; font-size: 13px; color: #FBBF24; font-weight: 700;">Balance Payable Before Dispatch:</td>
+                              <td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #FBBF24; font-family: monospace; font-weight: 700;">₹${(data.balanceDue || 0).toLocaleString('en-IN')}.00</td>
+                            </tr>`
+                          : ''
+                      }
+                      ${
+                        data.razorpayPaymentId
+                          ? `<tr>
+                              <td style="padding: 4px 12px; font-size: 11px; color: #9CA3AF;">Razorpay Transaction ID:</td>
+                              <td style="padding: 4px 12px; text-align: right; font-size: 11px; color: #E5E7EB; font-family: monospace;">${escapeHtml(data.razorpayPaymentId)}</td>
+                            </tr>`
+                          : ''
+                      }`
+                    : ''
+                }
               </table>
             </td>
           </tr>
@@ -800,6 +833,498 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
     senderEmail: cfg.smtpUser || '(not set)',
     adminEmail: cfg.adminEmailList.join(', '),
   });
+});
+
+// ==============================================================================
+// 3B. RAZORPAY PAYMENT GATEWAY ROUTES (100% PREPAID + 50% PARTIAL ADVANCE, NO COD)
+// ==============================================================================
+
+const getRazorpayConfig = () => ({
+  keyId: (process.env.RAZORPAY_KEY_ID || '').trim(),
+  keySecret: (process.env.RAZORPAY_KEY_SECRET || '').trim(),
+});
+
+app.get('/api/razorpay/status', (_req: Request, res: Response) => {
+  const rzp = getRazorpayConfig();
+  res.json({
+    configured: Boolean(rzp.keyId && rzp.keySecret),
+    keyId: rzp.keyId || null,
+  });
+});
+
+app.post('/api/razorpay/create-order', async (req: Request, res: Response) => {
+  try {
+    const rzp = getRazorpayConfig();
+    if (!rzp.keyId || !rzp.keySecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) are not configured on the server.',
+      });
+    }
+
+    const { amountInr, totalOrderValue, balanceDue, paymentPlan, receipt, customerName, customerEmail, customerPhone } = req.body || {};
+    const numericAmount = Number(amountInr);
+    if (!Number.isFinite(numericAmount) || numericAmount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payable amount for Razorpay order.',
+      });
+    }
+
+    const amountPaise = Math.round(numericAmount * 100);
+    const authHeader = 'Basic ' + Buffer.from(`${rzp.keyId}:${rzp.keySecret}`).toString('base64');
+
+    const rzpResp = await fetch('https://api.razorpay.com/v1/orders', {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: amountPaise,
+        currency: 'INR',
+        receipt: String(receipt || `tq_${Date.now()}`).slice(0, 40),
+        notes: {
+          payment_plan: paymentPlan || 'prepaid_100',
+          total_order_value_inr: String(totalOrderValue || numericAmount),
+          advance_paid_inr: String(numericAmount),
+          balance_due_inr: String(balanceDue || 0),
+          customer_name: String(customerName || ''),
+          customer_email: String(customerEmail || ''),
+          customer_phone: String(customerPhone || ''),
+        },
+      }),
+    });
+
+    const rzpData: any = await rzpResp.json();
+    if (!rzpResp.ok || !rzpData?.id) {
+      return res.status(rzpResp.status || 500).json({
+        success: false,
+        message: rzpData?.error?.description || 'Failed to create Razorpay order.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      orderId: rzpData.id,
+      amount: rzpData.amount,
+      currency: rzpData.currency,
+      keyId: rzp.keyId,
+    });
+  } catch (err: any) {
+    console.error('[Razorpay Create Order Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Error creating Razorpay order.',
+    });
+  }
+});
+
+app.post('/api/razorpay/verify-payment', (req: Request, res: Response) => {
+  try {
+    const rzp = getRazorpayConfig();
+    if (!rzp.keySecret) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'RAZORPAY_KEY_SECRET not configured on server.',
+      });
+    }
+
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Missing Razorpay verification signature fields.',
+      });
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', rzp.keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+
+    const isValid = crypto.timingSafeEqual(
+      Buffer.from(expectedSignature, 'utf8'),
+      Buffer.from(String(razorpay_signature), 'utf8')
+    );
+
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Payment signature mismatch. Possible tampering detected.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      verified: true,
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+    });
+  } catch (err: any) {
+    console.error('[Razorpay Verify Error]:', err);
+    return res.status(500).json({
+      success: false,
+      verified: false,
+      message: err?.message || 'Payment verification failed.',
+    });
+  }
+});
+
+// ==============================================================================
+// 3C. DELHIVERY ONE LOGISTICS API ROUTES (PREPAID ONLY - NO COD)
+// ==============================================================================
+
+const DELHIVERY_PICKUPS = [
+  { name: 'Teqqnoworld', city: 'Hyderabad', state: 'Telangana', pin: '502032' },
+  { name: 'Teqqnoworld 2', city: 'Hyderabad', state: 'Telangana', pin: '500090' },
+];
+
+const getDelhiveryConfig = () => ({
+  token: (process.env.DELHIVERY_API_TOKEN || '').trim(),
+  defaultPickup: (process.env.DELHIVERY_PICKUP_LOCATION || 'Teqqnoworld').trim(),
+  defaultOriginPin: (process.env.DELHIVERY_PICKUP_PINCODE || '502032').trim(),
+});
+
+app.get('/api/delhivery/status', (_req: Request, res: Response) => {
+  const cfg = getDelhiveryConfig();
+  res.json({
+    configured: Boolean(cfg.token),
+    defaultPickup: cfg.defaultPickup,
+    defaultOriginPin: cfg.defaultOriginPin,
+    pickups: DELHIVERY_PICKUPS,
+  });
+});
+
+app.get('/api/delhivery/pincode', async (req: Request, res: Response) => {
+  try {
+    const pin = String(req.query.pin || '').replace(/[^0-9]/g, '').slice(0, 6);
+    if (pin.length !== 6) {
+      return res.status(400).json({ success: false, serviceable: false, pincode: pin, message: 'Enter a valid 6-digit pincode.' });
+    }
+
+    const cfg = getDelhiveryConfig();
+    if (!cfg.token) {
+      return res.json({
+        success: false,
+        configured: false,
+        serviceable: true,
+        pincode: pin,
+        prepaid: true,
+        cod: false,
+        message: 'DELHIVERY_API_TOKEN not set yet — standard Delhivery Prepaid coverage assumed.',
+      });
+    }
+
+    const resp = await fetch(`https://track.delhivery.com/c/api/pin-codes/json/?filter_codes=${pin}`, {
+      headers: {
+        Authorization: `Token ${cfg.token}`,
+        Accept: 'application/json',
+      },
+    });
+    const data: any = await resp.json();
+    const record = data?.delivery_codes?.[0]?.postal_code;
+
+    if (!record) {
+      return res.json({
+        success: true,
+        configured: true,
+        serviceable: false,
+        pincode: pin,
+        prepaid: false,
+        cod: false,
+        message: `Pincode ${pin} is currently non-serviceable on Delhivery Express.`,
+      });
+    }
+
+    const prepaidOk = String(record.pre_paid || '').toUpperCase() === 'Y';
+    const isEmbargo = String(record.remarks || '').toLowerCase().includes('embargo');
+    const serviceable = prepaidOk && !isEmbargo;
+
+    return res.json({
+      success: true,
+      configured: true,
+      serviceable,
+      pincode: pin,
+      city: record.city || record.district || '',
+      state: record.state_code || '',
+      prepaid: prepaidOk,
+      cod: false, // Store policy: Prepaid & 50% Partial Advance only (no COD)
+      estimatedDays: '2–4 business days',
+      message: serviceable
+        ? `Delhivery Prepaid Express serviceable (${record.city || pin})`
+        : `Pincode ${pin} has delivery restrictions (${record.remarks || 'Not serviceable'}).`,
+    });
+  } catch (err: any) {
+    console.error('[Delhivery Pincode Error]:', err);
+    return res.status(500).json({
+      success: false,
+      serviceable: false,
+      pincode: String(req.query.pin || ''),
+      message: err?.message || 'Delhivery pincode lookup failed.',
+    });
+  }
+});
+
+app.post('/api/delhivery/create-shipment', async (req: Request, res: Response) => {
+  try {
+    const cfg = getDelhiveryConfig();
+    if (!cfg.token) {
+      return res.status(400).json({
+        success: false,
+        message: 'DELHIVERY_API_TOKEN is not configured in server environment variables.',
+      });
+    }
+
+    const {
+      orderId,
+      orderNumber,
+      pickupLocation,
+      customerName,
+      phone,
+      address,
+      city,
+      state,
+      pincode,
+      productDesc,
+      quantity,
+      totalAmount,
+      weightGrams,
+      lengthCm,
+      breadthCm,
+      heightCm,
+    } = req.body || {};
+
+    const cleanPin = String(pincode || '').replace(/[^0-9]/g, '').slice(0, 6);
+    const cleanPhone = String(phone || '').replace(/[^0-9]/g, '').slice(-10);
+
+    if (!customerName || cleanPin.length !== 6 || !cleanPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer name, 10-digit phone, and valid 6-digit delivery pincode are required for Delhivery manifest.',
+      });
+    }
+
+    const selectedPickup = (pickupLocation || cfg.defaultPickup || 'Teqqnoworld').trim();
+    const cmuPayload = {
+      shipments: [
+        {
+          name: String(customerName).slice(0, 100),
+          add: String(address || `${city}, ${state}`).slice(0, 250),
+          pin: cleanPin,
+          city: String(city || ''),
+          state: String(state || ''),
+          country: 'India',
+          phone: cleanPhone,
+          order: String(orderNumber || orderId || `TQ-${Date.now()}`),
+          payment_mode: 'Prepaid',
+          return_pin: '',
+          return_city: '',
+          return_phone: '',
+          return_add: '',
+          return_state: '',
+          return_country: '',
+          products_desc: String(productDesc || 'Custom Printed Corporate Merchandise').slice(0, 200),
+          hsn_code: '9989',
+          cod_amount: '0',
+          order_date: new Date().toISOString().split('T')[0],
+          total_amount: String(Math.round(Number(totalAmount) || 0)),
+          seller_add: '',
+          seller_name: 'TeqqnoWorld',
+          seller_inv: String(orderNumber || orderId || ''),
+          quantity: String(Number(quantity) || 1),
+          waybill: '',
+          shipment_width: String(Number(breadthCm) || 25),
+          shipment_height: String(Number(heightCm) || 12),
+          shipment_length: String(Number(lengthCm) || 30),
+          weight: String(Number(weightGrams) || 500),
+          seller_gst_tin: '',
+          shipping_mode: 'Surface',
+          address_type: 'home',
+        },
+      ],
+      pickup_location: {
+        name: selectedPickup,
+      },
+    };
+
+    const formBody = new URLSearchParams();
+    formBody.set('format', 'json');
+    formBody.set('data', JSON.stringify(cmuPayload));
+
+    const resp = await fetch('https://track.delhivery.com/api/cmu/create.json', {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${cfg.token}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: formBody.toString(),
+    });
+
+    const data: any = await resp.json();
+    const pkg = data?.packages?.[0];
+    const waybill = pkg?.waybill;
+
+    if (!data?.success || !waybill) {
+      const errMsg = pkg?.remarks?.join(', ') || data?.rmk || data?.error || 'Delhivery rejected shipment creation.';
+      return res.status(400).json({
+        success: false,
+        message: errMsg,
+        raw: data,
+      });
+    }
+
+    return res.json({
+      success: true,
+      waybill,
+      uploadWbn: data?.upload_wbn,
+      courierPartner: `Delhivery (${selectedPickup})`,
+      pickupLocation: selectedPickup,
+      message: `Delhivery Shipment Created! Waybill: ${waybill}`,
+      raw: data,
+    });
+  } catch (err: any) {
+    console.error('[Delhivery Create Shipment Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Delhivery shipment creation failed.',
+    });
+  }
+});
+
+app.get('/api/delhivery/label', async (req: Request, res: Response) => {
+  try {
+    const cfg = getDelhiveryConfig();
+    const wbns = String(req.query.wbns || '').trim();
+    if (!cfg.token || !wbns) {
+      return res.status(400).send('Missing DELHIVERY_API_TOKEN or waybill (wbns).');
+    }
+
+    const resp = await fetch(`https://track.delhivery.com/api/p/packing_slip?wbns=${encodeURIComponent(wbns)}&pdf=true`, {
+      headers: {
+        Authorization: `Token ${cfg.token}`,
+      },
+    });
+
+    const contentType = resp.headers.get('content-type') || '';
+    if (contentType.includes('application/pdf')) {
+      const pdfBuf = Buffer.from(await resp.arrayBuffer());
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="Delhivery_Label_${wbns}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    const jsonData: any = await resp.json();
+    if (jsonData?.packages?.[0]?.pdf_download_link) {
+      return res.redirect(jsonData.packages[0].pdf_download_link);
+    }
+    return res.json(jsonData);
+  } catch (err: any) {
+    return res.status(500).send(err?.message || 'Failed to fetch Delhivery shipping label.');
+  }
+});
+
+app.post('/api/delhivery/pickup', async (req: Request, res: Response) => {
+  try {
+    const cfg = getDelhiveryConfig();
+    if (!cfg.token) {
+      return res.status(400).json({ success: false, message: 'DELHIVERY_API_TOKEN not configured.' });
+    }
+
+    const { pickupLocation, pickupDate, pickupTime, expectedPackageCount } = req.body || {};
+    const resp = await fetch('https://track.delhivery.com/fm/request/new/', {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${cfg.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        pickup_location: pickupLocation || cfg.defaultPickup,
+        pickup_date: pickupDate || new Date(Date.now() + 86400000).toISOString().split('T')[0],
+        pickup_time: pickupTime || '14:00:00',
+        expected_package_count: Number(expectedPackageCount) || 1,
+      }),
+    });
+
+    const data: any = await resp.json();
+    if (!resp.ok || data?.pr_exist === false && !data?.pickup_id) {
+      return res.status(400).json({
+        success: false,
+        message: data?.error?.message || data?.message || 'Delhivery pickup request failed.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      pickupId: String(data?.pickup_id || ''),
+      message: `Delhivery Pickup scheduled (${pickupLocation || cfg.defaultPickup})! ID: ${data?.pickup_id || 'Confirmed'}`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Pickup request failed.' });
+  }
+});
+
+app.get('/api/delhivery/track', async (req: Request, res: Response) => {
+  try {
+    const cfg = getDelhiveryConfig();
+    const waybill = String(req.query.waybill || '').trim();
+    if (!cfg.token || !waybill) {
+      return res.status(400).json({
+        success: false,
+        waybill,
+        scans: [],
+        message: !cfg.token ? 'DELHIVERY_API_TOKEN not configured.' : 'Waybill number required.',
+      });
+    }
+
+    const resp = await fetch(`https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(waybill)}`, {
+      headers: {
+        Authorization: `Token ${cfg.token}`,
+        Accept: 'application/json',
+      },
+    });
+    const data: any = await resp.json();
+    const shipment = data?.ShipmentData?.[0]?.Shipment;
+
+    if (!shipment) {
+      return res.json({
+        success: false,
+        waybill,
+        scans: [],
+        message: `No tracking data found yet for Waybill ${waybill}.`,
+      });
+    }
+
+    const scans = (shipment.Scans || []).map((s: any) => ({
+      status: s?.ScanDetail?.Scan || '',
+      location: s?.ScanDetail?.ScannedLocation || '',
+      time: s?.ScanDetail?.ScanDateTime || '',
+      instructions: s?.ScanDetail?.Instructions || '',
+    }));
+
+    return res.json({
+      success: true,
+      waybill,
+      currentStatus: shipment?.Status?.Status || 'In Progress',
+      statusLocation: shipment?.Status?.StatusLocation || '',
+      expectedDelivery: shipment?.ExpectedDeliveryDate || '',
+      origin: shipment?.Origin || '',
+      destination: shipment?.Destination || '',
+      scans,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      waybill: String(req.query.waybill || ''),
+      scans: [],
+      message: err?.message || 'Delhivery tracking lookup failed.',
+    });
+  }
 });
 
 // ==============================================================================

@@ -11,11 +11,14 @@ import {
   Share2, 
   Sparkles,
   ArrowRight,
-  AlertCircle
+  AlertCircle,
+  Loader2,
+  MapPin
 } from 'lucide-react';
 import { Order } from '../types';
 import { ProductMockupCanvas } from './ProductMockupCanvas';
 import { generateOrderTaxInvoicePdf } from '../utils/pdfGenerator';
+import { trackDelhiveryWaybill, DelhiveryTrackResponse } from '../services/paymentAndLogisticsService';
 
 interface OrderConfirmationViewProps {
   order: Order;
@@ -34,6 +37,20 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
   const [proofNote, setProofNote] = useState('');
   const [revisionRequested, setRevisionRequested] = useState(false);
   const [proofView, setProofView] = useState<'front' | 'back'>('front');
+  const [liveTrackData, setLiveTrackData] = useState<DelhiveryTrackResponse | null>(null);
+  const [isTrackingShipment, setIsTrackingShipment] = useState(false);
+
+  const handleLiveTrack = async () => {
+    const awb = order.trackingNumber?.trim();
+    if (!awb || awb.toLowerCase().includes('awaiting')) return;
+    setIsTrackingShipment(true);
+    try {
+      const res = await trackDelhiveryWaybill(awb);
+      setLiveTrackData(res);
+    } finally {
+      setIsTrackingShipment(false);
+    }
+  };
 
   // Approve digital proof
   const handleApproveProof = () => {
@@ -288,10 +305,50 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
               </h3>
             </div>
 
-            <div className="text-xs font-mono text-zinc-600">
-              Partner: <strong>{order.courierPartner}</strong> · Waybill: <strong>{order.trackingNumber}</strong>
+            <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono text-zinc-600">
+              <span>
+                Partner: <strong>{order.courierPartner || 'Delhivery Express (Prepaid)'}</strong> · Waybill:{' '}
+                <strong>{order.trackingNumber || 'Awaiting Manifest'}</strong>
+              </span>
+              {order.trackingNumber && !order.trackingNumber.toLowerCase().includes('awaiting') && (
+                <button
+                  type="button"
+                  onClick={handleLiveTrack}
+                  disabled={isTrackingShipment}
+                  className="bg-[#FF7A00] hover:bg-[#ff881a] text-white px-2.5 py-1 rounded-lg font-sans font-semibold text-[11px] inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                >
+                  {isTrackingShipment ? <Loader2 className="w-3 h-3 animate-spin" /> : <MapPin className="w-3 h-3" />}
+                  <span>Live Track</span>
+                </button>
+              )}
             </div>
           </div>
+
+          {liveTrackData && (
+            <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 text-xs space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-[#0B0B0D]">
+                  Delhivery Status: {liveTrackData.currentStatus || (liveTrackData.success ? 'Manifested' : 'Pending Scan')}
+                </span>
+                {liveTrackData.statusLocation && (
+                  <span className="font-mono text-zinc-600">Location: {liveTrackData.statusLocation}</span>
+                )}
+              </div>
+              {liveTrackData.message && !liveTrackData.success && (
+                <p className="text-zinc-600">{liveTrackData.message}</p>
+              )}
+              {liveTrackData.scans?.length > 0 && (
+                <div className="space-y-1 pt-1 border-t border-zinc-200 max-h-40 overflow-y-auto">
+                  {liveTrackData.scans.slice(0, 5).map((s, idx) => (
+                    <div key={idx} className="flex justify-between gap-3 text-[11px] text-zinc-700">
+                      <span className="font-medium">{s.status} — {s.location}</span>
+                      <span className="font-mono text-zinc-500 shrink-0">{s.time}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 6-Stage Production Timeline */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-2">
@@ -322,8 +379,8 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
               },
               {
                 step: '5',
-                title: 'Air Dispatch',
-                desc: `BlueDart: ${order.trackingNumber || 'Pending'}`,
+                title: 'Delhivery Dispatch',
+                desc: `${order.courierPartner?.split(' ')[0] || 'Delhivery'}: ${order.trackingNumber || 'Awaiting Manifest'}`,
                 done: order.orderStatus === 'Dispatched' || order.orderStatus === 'Delivered',
               },
               {
@@ -405,9 +462,29 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
               <span className="font-mono text-zinc-900">₹{order.gstAmount.toLocaleString('en-IN')}</span>
             </div>
             <div className="pt-2 border-t border-zinc-200 flex justify-between font-display font-bold text-base text-[#0B0B0D]">
-              <span>Total Amount:</span>
-              <span className="text-[#FF7A00]">₹{order.total.toLocaleString('en-IN')}</span>
+              <span>Total Order Value:</span>
+              <span className="text-[#FF7A00] font-mono">₹{order.total.toLocaleString('en-IN')}</span>
             </div>
+            {typeof order.amountPaid === 'number' && (
+              <div className="pt-2 border-t border-dashed border-zinc-200 space-y-1">
+                <div className="flex justify-between text-emerald-700 font-semibold">
+                  <span>Paid Online ({order.paymentMode}):</span>
+                  <span className="font-mono">₹{order.amountPaid.toLocaleString('en-IN')}</span>
+                </div>
+                {(order.balanceDue || 0) > 0 && (
+                  <div className="flex justify-between text-amber-700 font-semibold">
+                    <span>Remaining 50% Balance (Before Dispatch · No COD):</span>
+                    <span className="font-mono">₹{(order.balanceDue || 0).toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+                {order.razorpayPaymentId && (
+                  <div className="flex justify-between text-zinc-500 text-[11px]">
+                    <span>Razorpay Transaction ID:</span>
+                    <span className="font-mono text-zinc-700">{order.razorpayPaymentId}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

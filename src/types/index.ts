@@ -282,8 +282,21 @@ export interface Order {
   estimatedDispatch: string;
   trackingNumber?: string;
   courierPartner?: string;
-  paymentMode: 'Test Gateway (Pre-Integration)' | 'Pay on Approval' | 'Corporate PO 30-Day';
-  paymentStatus: 'Test Authenticated (Sandbox)' | 'Pending Verification';
+  paymentMode:
+    | 'Full Prepaid (100% Online)'
+    | 'Partial Payment (50% Advance)'
+    | 'Test Gateway (Pre-Integration)'
+    | 'Pay on Approval'
+    | 'Corporate PO 30-Day';
+  paymentStatus:
+    | 'Paid in Full (Razorpay)'
+    | '50% Advance Paid (Razorpay)'
+    | 'Test Authenticated (Sandbox)'
+    | 'Pending Verification';
+  amountPaid?: number;
+  balanceDue?: number;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
   emailNotification?: {
     status: 'sent' | 'simulated' | 'failed';
     message?: string;
