@@ -578,33 +578,45 @@ export default function App() {
     );
   }
 
+  const isCustomerPortalFull = currentTab === 'dashboard' && Boolean(user);
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F4F2FA] text-[#1A1B22] font-sans w-full max-w-full overflow-x-clip">
       
       {/* 1. Global Announcement Ribbon */}
-      <AnnouncementBar onTrackOrderClick={() => setCurrentTab('orders')} />
+      {!isCustomerPortalFull && (
+        <AnnouncementBar onTrackOrderClick={() => setCurrentTab('orders')} />
+      )}
 
       {/* 2. Top Navigation Bar */}
-      <Navbar
-        currentTab={currentTab}
-        onNavigate={handleNavigate}
-        cartCount={totalCartCount}
-        cartTotal={totalCartPrice}
-        onOpenCart={() => setIsCartOpen(true)}
-        wishlistCount={wishlistProducts.length}
-        onOpenWishlist={() => setIsWishlistOpen(true)}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        onOpenAccount={handleOpenAccount}
-        user={user}
-        onLogout={handleLogout}
-        onOpenQuoteCalculator={() => setIsQuoteCalculatorOpen(true)}
-        onOpenBundleBuilder={() => setIsBundleBuilderOpen(true)}
-        onOpenDownloadCatalog={() => setIsDownloadCatalogOpen(true)}
-        onOpenTracking={() => setIsTrackingModalOpen(true)}
-      />
+      {!isCustomerPortalFull && (
+        <Navbar
+          currentTab={currentTab}
+          onNavigate={handleNavigate}
+          cartCount={totalCartCount}
+          cartTotal={totalCartPrice}
+          onOpenCart={() => setIsCartOpen(true)}
+          wishlistCount={wishlistProducts.length}
+          onOpenWishlist={() => setIsWishlistOpen(true)}
+          onOpenSearch={() => setIsSearchOpen(true)}
+          onOpenAccount={handleOpenAccount}
+          user={user}
+          onLogout={handleLogout}
+          onOpenQuoteCalculator={() => setIsQuoteCalculatorOpen(true)}
+          onOpenBundleBuilder={() => setIsBundleBuilderOpen(true)}
+          onOpenDownloadCatalog={() => setIsDownloadCatalogOpen(true)}
+          onOpenTracking={() => setIsTrackingModalOpen(true)}
+        />
+      )}
 
       {/* 3. Main Views Routing */}
-      <main className={`flex-1 ${currentTab === 'product-detail' || currentTab === 'checkout' ? 'pb-0' : 'pb-24 md:pb-0'}`}>
+      <main
+        className={`flex-1 ${
+          isCustomerPortalFull || currentTab === 'product-detail' || currentTab === 'checkout'
+            ? 'pb-0'
+            : 'pb-24 md:pb-0'
+        }`}
+      >
         {/* VIEW A: HOMEPAGE (Exact match to IMAGE 2) */}
         {currentTab === 'home' && (
           <div>
@@ -771,6 +783,16 @@ export default function App() {
                 setActiveOrder(order);
                 setCurrentTab('orders');
               }}
+              wishlistIds={wishlistIds}
+              onToggleWishlist={handleToggleWishlist}
+              cartCount={totalCartCount}
+              onOpenCart={() => setIsCartOpen(true)}
+              onOpenQuoteCalculator={() => setIsQuoteCalculatorOpen(true)}
+              onOpenBundleBuilder={() => setIsBundleBuilderOpen(true)}
+              onOpenAuth={() => {
+                setAuthModalNote('Sign in with your verified email and password to update security settings');
+                setIsAuthModalOpen(true);
+              }}
             />
           ) : (
             <div className="py-20 px-4 text-center max-w-md mx-auto space-y-4">
@@ -834,10 +856,12 @@ export default function App() {
       </main>
 
       {/* 4. Global Footer with Pre-Footer Trust Strip */}
-      <Footer 
-        onNavigate={handleNavigate} 
-        onOpenSupabaseDev={() => setIsSupabaseDevOpen(true)} 
-      />
+      {!isCustomerPortalFull && (
+        <Footer 
+          onNavigate={handleNavigate} 
+          onOpenSupabaseDev={() => setIsSupabaseDevOpen(true)} 
+        />
+      )}
 
 
       {/* 5. Cart Slide-Over Drawer */}
@@ -941,21 +965,23 @@ export default function App() {
 
 
       {/* 8. Floating Direct WhatsApp Trigger (Desktop & Tablet) */}
-      <a
-        href={getWhatsAppLink('Hello TeqqnoWorld, I want to discuss custom branded merchandise for my company')}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Direct WhatsApp Print Consultant"
-        className="hidden md:flex fixed bottom-6 right-6 z-40 bg-[#1EBE5D] hover:bg-[#19a851] text-white p-3.5 rounded-full shadow-xl shadow-[#1EBE5D]/30 hover:scale-105 active:scale-95 transition-all items-center gap-2 group"
-      >
-        <WhatsAppIcon className="w-6 h-6 text-white" />
-        <span className="inline-block max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs transition-all duration-300 text-xs font-semibold">
-          Chat on WhatsApp ({BUSINESS_CONFIG.contact.whatsapp})
-        </span>
-      </a>
+      {!isCustomerPortalFull && (
+        <a
+          href={getWhatsAppLink('Hello TeqqnoWorld, I want to discuss custom branded merchandise for my company')}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Direct WhatsApp Print Consultant"
+          className="hidden md:flex fixed bottom-6 right-6 z-40 bg-[#1EBE5D] hover:bg-[#19a851] text-white p-3.5 rounded-full shadow-xl shadow-[#1EBE5D]/30 hover:scale-105 active:scale-95 transition-all items-center gap-2 group"
+        >
+          <WhatsAppIcon className="w-6 h-6 text-white" />
+          <span className="inline-block max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs transition-all duration-300 text-xs font-semibold">
+            Chat on WhatsApp ({BUSINESS_CONFIG.contact.whatsapp})
+          </span>
+        </a>
+      )}
 
-      {/* 9. Mobile Bottom App Navigation Dock (Phones & Small Tablets < 768px, outside PDP & Checkout) */}
-      {currentTab !== 'product-detail' && currentTab !== 'checkout' && (
+      {/* 9. Mobile Bottom App Navigation Dock (Phones & Small Tablets < 768px, outside PDP, Checkout & Full Customer Portal) */}
+      {!isCustomerPortalFull && currentTab !== 'product-detail' && currentTab !== 'checkout' && (
         <nav
           aria-label="Mobile Bottom Navigation"
           className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-zinc-200 px-2 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] shadow-lg flex items-center justify-around"

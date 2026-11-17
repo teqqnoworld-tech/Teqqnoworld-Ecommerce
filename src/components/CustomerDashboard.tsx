@@ -1,73 +1,99 @@
-import React, { useState } from 'react';
-import { 
-  User, 
-  Package, 
-  Truck, 
-  Palette, 
-  MapPin, 
-  FileText, 
-  Receipt, 
-  Heart, 
-  Layers, 
-  Bell, 
-  Settings, 
-  HelpCircle, 
-  LogOut, 
-  ShieldCheck, 
-  Building2, 
-  CheckCircle2, 
-  Clock, 
-  Search, 
-  Plus, 
-  ExternalLink, 
-  Download, 
-  RotateCcw, 
-  Trash2, 
-  ChevronRight, 
-  Printer, 
-  Upload, 
-  Sparkles, 
-  AlertCircle,
-  Phone,
-  Mail,
-  Copy,
-  Check
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bell,
+  Building2,
+  Calculator,
+  Calendar,
+  Camera,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  CreditCard,
+  Download,
+  ExternalLink,
+  Eye,
+  FileText,
+  Gift,
+  Heart,
+  HelpCircle,
+  Home,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  LayoutGrid,
+  Lock,
+  LogOut,
+  MapPin,
+  Menu,
+  MoreHorizontal,
+  Package,
+  Palette,
+  PenTool,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Settings,
+  ShieldCheck,
+  ShoppingBag,
+  SlidersHorizontal,
+  Sparkles,
+  Truck,
+  Upload,
+  User,
+  X,
 } from 'lucide-react';
-import { WhatsAppIcon } from './WhatsAppIcon';
-import { 
-  UserProfile, 
-  Order, 
-  SavedAddress, 
-  CustomerArtwork, 
-  TaxInvoice, 
-  BulkEnquirySubmission, 
-  NotificationItem,
-  Product,
-  CartItem
-} from '../types';
-import { 
-  MOCK_ARTWORKS, 
-  MOCK_INVOICES, 
-  MOCK_BULK_QUOTES, 
-  MOCK_NOTIFICATIONS, 
-  PRODUCTS 
-} from '../data/mockData';
+import { PRODUCTS } from '../data/mockData';
 import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
-import { generateOrderTaxInvoicePdf, generateTaxInvoicePdf } from '../utils/pdfGenerator';
+import { CustomOrderRow, supabase } from '../lib/supabase';
+import { fetchCustomerCustomOrders, uploadBrandLogoToStorage } from '../services/supabaseService';
+import {
+  BulkEnquirySubmission,
+  CustomerArtwork,
+  Order,
+  SavedAddress,
+  UserProfile,
+} from '../types';
+import { generateOrderTaxInvoicePdf } from '../utils/pdfGenerator';
+import {
+  AccountSubSection,
+  buildOrderAnalyticsSeries,
+  computeStatusBreakdown,
+  CustomerTab,
+  deriveInvoicesFromOrders,
+  deriveNotificationsFromOrders,
+  extractBrandAssetsFromOrders,
+  getOrderStatusBadgeMeta,
+  getPortalGreetingSubtext,
+  getThumbnailForOrder,
+  mergeCustomerOrders,
+  validateBrandAssetFile,
+} from './customer/customerUtils';
+import {
+  AssetPreviewThumb,
+  CustomerKpiCard,
+  OrdersAreaChart,
+  OrderStatusDonut,
+  PortalToast,
+  PortalToastList,
+} from './customer/CustomerVisuals';
+import {
+  CustomerAccountSecurityView,
+  CustomerAddressesView,
+  CustomerBrandAssetsView,
+  CustomerBulkRfqView,
+  CustomerGstInvoicesView,
+  CustomerSupportView,
+  CustomerTrackConsignmentView,
+  CustomerWishlistView,
+  OrderDetailDrawer,
+} from './customer/CustomerSections';
 
-export type DashboardTab = 
-  | 'overview' 
-  | 'orders' 
-  | 'track' 
-  | 'artworks' 
-  | 'addresses' 
-  | 'gst' 
-  | 'invoices' 
-  | 'wishlist' 
-  | 'quotes' 
-  | 'notifications' 
-  | 'settings' 
-  | 'support';
+export type DashboardTab = CustomerTab;
 
 interface CustomerDashboardProps {
   user: UserProfile;
@@ -78,1692 +104,1864 @@ interface CustomerDashboardProps {
   onCustomizeProduct: (productId: string) => void;
   onReorder: (order: Order) => void;
   onSelectOrderProof: (order: Order) => void;
+  wishlistIds?: string[];
+  onToggleWishlist?: (productId: string) => void;
+  cartCount?: number;
+  onOpenCart?: () => void;
+  onOpenQuoteCalculator?: () => void;
+  onOpenBundleBuilder?: () => void;
+  onOpenAuth?: () => void;
 }
 
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   user,
-  orders,
+  orders: propOrders,
   onUpdateUser,
   onLogout,
   onNavigateTab,
   onCustomizeProduct,
   onReorder,
   onSelectOrderProof,
+  wishlistIds = [],
+  onToggleWishlist,
+  cartCount = 0,
+  onOpenCart,
+  onOpenQuoteCalculator,
+  onOpenBundleBuilder,
+  onOpenAuth,
 }) => {
-  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [activeTab, setActiveTab] = useState<CustomerTab>('overview');
+  const [accountSubSection, setAccountSubSection] = useState<AccountSubSection>('profile');
+  const [accountMenuExpanded, setAccountMenuExpanded] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
-  // Local state for dashboard sub-features
-  const [addresses, setAddresses] = useState<SavedAddress[]>(user.savedAddresses || []);
-  const [artworks, setArtworks] = useState<CustomerArtwork[]>(MOCK_ARTWORKS);
-  const [invoices, setInvoices] = useState<TaxInvoice[]>(MOCK_INVOICES);
-  const [bulkQuotes, setBulkQuotes] = useState<BulkEnquirySubmission[]>(MOCK_BULK_QUOTES);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(MOCK_NOTIFICATIONS);
-  const [wishlist, setWishlist] = useState<Product[]>([PRODUCTS[0], PRODUCTS[2]]);
+  // Live Supabase Custom Orders Sync
+  const [supabaseOrders, setSupabaseOrders] = useState<CustomOrderRow[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  // Order filters
-  const [orderSearchQuery, setOrderSearchQuery] = useState('');
-  const [orderStatusFilter, setOrderStatusFilter] = useState<'All' | 'Confirmed' | 'Artwork Verification' | 'Dispatched' | 'Delivered'>('All');
-
-  // Selected order for live tracking view
-  const [selectedTrackOrder, setSelectedTrackOrder] = useState<Order>(orders[0] || null);
-
-  // Invoice preview modal
-  const [activeInvoicePreview, setActiveInvoicePreview] = useState<TaxInvoice | null>(null);
-
-  // Address modal
-  const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
-  const [editingAddress, setEditingAddress] = useState<SavedAddress | null>(null);
-  const [addressFormData, setAddressFormData] = useState({
-    title: 'New Branch Office',
-    fullName: user.name,
-    companyName: user.companyName || '',
-    phone: user.mobile,
-    street: '',
-    city: 'Bengaluru',
-    state: 'Karnataka',
-    pincode: '560001',
-    isDefault: false,
-    type: 'shipping' as 'shipping' | 'billing' | 'both',
-  });
-
-  // Artwork upload state
-  const [newArtworkTitle, setNewArtworkTitle] = useState('');
-  const [isUploadingArtwork, setIsUploadingArtwork] = useState(false);
-  const [artworkUploadSuccess, setArtworkUploadSuccess] = useState(false);
-
-  // Settings profile form state
-  const [profileName, setProfileName] = useState(user.name);
-  const [profileEmail, setProfileEmail] = useState(user.email);
-  const [profileCompany, setProfileCompany] = useState(user.companyName || '');
-  const [profileDesignation, setProfileDesignation] = useState(user.designation || '');
-  const [profileGstin, setProfileGstin] = useState(user.gstin || '');
-  const [profileSavedToast, setProfileSavedToast] = useState(false);
-
-  // Copy helper
-  const [copiedText, setCopiedText] = useState<string | null>(null);
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedText(text);
-    setTimeout(() => setCopiedText(null), 2000);
-  };
-
-  // Filtered orders
-  const filteredOrders = orders.filter((o) => {
-    const matchesSearch = 
-      o.orderNumber.toLowerCase().includes(orderSearchQuery.toLowerCase()) ||
-      o.items.some(i => i.product.name.toLowerCase().includes(orderSearchQuery.toLowerCase()));
-    const matchesFilter = orderStatusFilter === 'All' || o.orderStatus === orderStatusFilter;
-    return matchesSearch && matchesFilter;
-  });
-
-  // Handle Save Address
-  const handleSaveAddress = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!addressFormData.street || !addressFormData.pincode) return;
-
-    if (editingAddress) {
-      const updated = addresses.map(a => a.id === editingAddress.id ? { ...a, ...addressFormData } : a);
-      setAddresses(updated);
-      onUpdateUser({ ...user, savedAddresses: updated });
-    } else {
-      const newAddr: SavedAddress = {
-        id: `addr-${Date.now()}`,
-        ...addressFormData,
-      };
-      const updated = addressFormData.isDefault 
-        ? [newAddr, ...addresses.map(a => ({ ...a, isDefault: false }))]
-        : [newAddr, ...addresses];
-      setAddresses(updated);
-      onUpdateUser({ ...user, savedAddresses: updated });
+  const syncLiveOrders = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetchCustomerCustomOrders(user.email, user.mobile);
+      setSupabaseOrders(res.data || []);
+    } finally {
+      setIsSyncing(false);
     }
-    setIsAddressModalOpen(false);
-    setEditingAddress(null);
   };
 
-  const handleDeleteAddress = (id: string) => {
-    const updated = addresses.filter(a => a.id !== id);
-    setAddresses(updated);
-    onUpdateUser({ ...user, savedAddresses: updated });
-  };
+  useEffect(() => {
+    syncLiveOrders();
+  }, [user.email, user.mobile]);
 
-  // Handle Upload Artwork Mock
-  const handleUploadArtwork = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newArtworkTitle.trim()) return;
-    setIsUploadingArtwork(true);
+  // Merged real orders (local React state + live Supabase rows)
+  const mergedOrders = useMemo(
+    () => mergeCustomerOrders(propOrders, supabaseOrders),
+    [propOrders, supabaseOrders]
+  );
 
+  // Toast feedback system (never uses window.alert)
+  const [toasts, setToasts] = useState<PortalToast[]>([]);
+  const pushToast = (message: string, variant: PortalToast['variant'] = 'success') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    setToasts((prev) => [...prev.slice(-3), { id, message, variant }]);
     setTimeout(() => {
-      const newArt: CustomerArtwork = {
-        id: `art-${Date.now()}`,
-        title: newArtworkTitle.trim(),
-        fileType: 'vector',
-        fileName: `${newArtworkTitle.toLowerCase().replace(/\s+/g, '_')}_vector.ai`,
-        fileSize: '4.8 MB',
-        resolution: '300 DPI Vector PDF/AI',
-        uploadedAt: new Date().toISOString().split('T')[0],
-        status: 'Approved for Production',
-        previewUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80',
-        associatedOrdersCount: 0,
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3600);
+  };
+
+  // Profile picture quick upload from sidebar
+  const sidebarAvatarInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const handleQuickAvatarUpload = async (file: File) => {
+    const check = validateBrandAssetFile(file);
+    if (!check.valid || file.name.toLowerCase().endsWith('.pdf')) {
+      pushToast('Please select a PNG, JPG, JPEG, or SVG photo (max 15 MB)', 'error');
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const res = await uploadBrandLogoToStorage(file, `avatar-${user.id}-${file.name}`);
+      onUpdateUser({ ...user, avatarUrl: res.publicUrl });
+      pushToast('Profile photo updated', 'success');
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        onUpdateUser({ ...user, avatarUrl: String(reader.result || '') });
+        pushToast('Profile photo updated locally', 'success');
       };
-      setArtworks([newArt, ...artworks]);
-      setIsUploadingArtwork(false);
-      setNewArtworkTitle('');
-      setArtworkUploadSuccess(true);
-      setTimeout(() => setArtworkUploadSuccess(false), 3000);
-    }, 700);
+      reader.readAsDataURL(file);
+    } finally {
+      setUploadingAvatar(false);
+    }
   };
 
-  // Handle Save Profile Settings
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    const updated: UserProfile = {
-      ...user,
-      name: profileName,
-      email: profileEmail,
-      companyName: profileCompany,
-      designation: profileDesignation,
-      gstin: profileGstin,
-    };
-    onUpdateUser(updated);
-    setProfileSavedToast(true);
-    setTimeout(() => setProfileSavedToast(false), 3000);
+  // Persisted per-user Brand Assets (merged with order-submitted artworks)
+  const brandStorageKey = `teqqno_brand_assets_${user.id}`;
+  const [uploadedAssets, setUploadedAssets] = useState<CustomerArtwork[]>(() => {
+    try {
+      const saved = localStorage.getItem(brandStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(brandStorageKey, JSON.stringify(uploadedAssets));
+    } catch {
+      // ignore
+    }
+  }, [uploadedAssets, brandStorageKey]);
+
+  const orderDerivedAssets = useMemo(
+    () => extractBrandAssetsFromOrders(mergedOrders),
+    [mergedOrders]
+  );
+
+  const allBrandAssets = useMemo(
+    () => [...uploadedAssets, ...orderDerivedAssets],
+    [uploadedAssets, orderDerivedAssets]
+  );
+
+  // Persisted per-user Bulk RFQs
+  const rfqStorageKey = `teqqno_customer_rfqs_${user.id}`;
+  const [customerRfqs, setCustomerRfqs] = useState<BulkEnquirySubmission[]>(() => {
+    try {
+      const saved = localStorage.getItem(rfqStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(rfqStorageKey, JSON.stringify(customerRfqs));
+    } catch {
+      // ignore
+    }
+  }, [customerRfqs, rfqStorageKey]);
+
+  // Derived Invoices (real orders)
+  const invoices = useMemo(() => deriveInvoicesFromOrders(mergedOrders), [mergedOrders]);
+
+  // Persisted read notifications
+  const notifReadKey = `teqqno_notif_read_${user.id}`;
+  const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(notifReadKey);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [notifPopoverOpen, setNotifPopoverOpen] = useState(false);
+
+  const notifications = useMemo(
+    () => deriveNotificationsFromOrders(mergedOrders, customerRfqs, readNotifIds),
+    [mergedOrders, customerRfqs, readNotifIds]
+  );
+  const unreadNotifCount = notifications.filter((n) => !n.read).length;
+
+  const markAllNotifsRead = () => {
+    const allIds = notifications.map((n) => n.id);
+    setReadNotifIds(allIds);
+    try {
+      localStorage.setItem(notifReadKey, JSON.stringify(allIds));
+    } catch {
+      // ignore
+    }
+    pushToast('All notifications marked as read', 'info');
   };
 
-  // Nav menu items
-  const navItems = [
-    { id: 'overview', label: 'Dashboard Overview', icon: Layers },
-    { id: 'orders', label: 'My Orders & Proofs', icon: Package, badge: orders.length },
-    { id: 'track', label: 'Track Consignment', icon: Truck },
-    { id: 'artworks', label: 'My Artwork & Logos', icon: Palette, badge: artworks.length },
-    { id: 'addresses', label: 'Saved Addresses', icon: MapPin },
-    { id: 'gst', label: 'GST & Corporate Tax', icon: Building2 },
-    { id: 'invoices', label: 'Tax Invoices (SAC 9989)', icon: Receipt },
-    { id: 'wishlist', label: 'Saved Wishlist', icon: Heart, badge: wishlist.length },
-    { id: 'quotes', label: 'Bulk RFQ Enquiries', icon: FileText, badge: bulkQuotes.length },
-    { id: 'notifications', label: 'Alerts & Proof Updates', icon: Bell, badge: notifications.filter(n => !n.read).length },
-    { id: 'settings', label: 'Account & Preferences', icon: Settings },
-    { id: 'support', label: 'Help & WhatsApp Support', icon: HelpCircle },
+  // Synced Wishlist
+  const [localWishlistIds, setLocalWishlistIds] = useState<string[]>(wishlistIds);
+  useEffect(() => {
+    setLocalWishlistIds(wishlistIds);
+  }, [wishlistIds]);
+
+  const activeWishlistIds = onToggleWishlist ? wishlistIds : localWishlistIds;
+  const wishlistProducts = useMemo(
+    () => PRODUCTS.filter((p) => activeWishlistIds.includes(p.id)),
+    [activeWishlistIds]
+  );
+
+  const handleToggleWish = (productId: string) => {
+    if (onToggleWishlist) {
+      onToggleWishlist(productId);
+    } else {
+      setLocalWishlistIds((prev) =>
+        prev.includes(productId) ? prev.filter((id) => id !== productId) : [productId, ...prev]
+      );
+    }
+    pushToast('Updated saved wishlist', 'info');
+  };
+
+  // Analytics Chart Timeframe + Real Series + Donut Breakdown
+  const [chartDays, setChartDays] = useState<7 | 30 | 90>(30);
+  const analyticsSeries = useMemo(
+    () => buildOrderAnalyticsSeries(mergedOrders, chartDays),
+    [mergedOrders, chartDays]
+  );
+  const statusBreakdown = useMemo(
+    () => computeStatusBreakdown(mergedOrders),
+    [mergedOrders]
+  );
+
+  // KPI Metrics (100% Real Data)
+  const totalOrdersCount = mergedOrders.length;
+  const activeProductionCount = mergedOrders.filter(
+    (o) => o.orderStatus !== 'Delivered'
+  ).length;
+  const invoicesCount = invoices.length;
+  const brandAssetsCount = allBrandAssets.length;
+
+  // Sparkline series from real order timeline (padded gently for visual balance if < 2 points)
+  const orderSparkPoints = analyticsSeries.map((pt) => pt.ordersCount);
+  const valueSparkPoints = analyticsSeries.map((pt) => pt.revenue);
+
+  // Order Table Filtering, Sorting, Pagination & Detail Drawer
+  const [orderSearch, setOrderSearch] = useState('');
+  const [orderFilter, setOrderFilter] = useState<
+    'All' | 'Artwork Verification' | 'Confirmed' | 'Manufacturing' | 'Dispatched' | 'Delivered'
+  >('All');
+  const [orderSort, setOrderSort] = useState<'newest' | 'oldest' | 'highest'>('newest');
+  const [ordersPage, setOrdersPage] = useState(1);
+  const ORDERS_PER_PAGE = 6;
+
+  const [detailDrawerOrder, setDetailDrawerOrder] = useState<Order | null>(null);
+  const [trackTargetOrder, setTrackTargetOrder] = useState<Order | null>(null);
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
+
+  const filteredOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+    const list = mergedOrders.filter((o) => {
+      const matchesStatus = orderFilter === 'All' || o.orderStatus === orderFilter;
+      if (!matchesStatus) return false;
+      if (!q) return true;
+      return (
+        o.orderNumber.toLowerCase().includes(q) ||
+        o.items.some(
+          (it) =>
+            it.product.name.toLowerCase().includes(q) ||
+            it.printMethod.toLowerCase().includes(q) ||
+            (it.color?.name || '').toLowerCase().includes(q)
+        )
+      );
+    });
+
+    return [...list].sort((a, b) => {
+      if (orderSort === 'highest') return b.total - a.total;
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      return orderSort === 'oldest' ? ta - tb : tb - ta;
+    });
+  }, [mergedOrders, orderSearch, orderFilter, orderSort]);
+
+  const totalOrderPages = Math.max(1, Math.ceil(filteredOrders.length / ORDERS_PER_PAGE));
+  const pagedOrders = filteredOrders.slice(
+    (ordersPage - 1) * ORDERS_PER_PAGE,
+    ordersPage * ORDERS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setOrdersPage(1);
+  }, [orderSearch, orderFilter, orderSort]);
+
+  // Helper to apply saved brand logo onto product in customizer
+  const handleApplyAssetToProduct = (asset: CustomerArtwork, productId: string) => {
+    try {
+      sessionStorage.setItem(
+        'teqqno_pending_brand_asset',
+        JSON.stringify({ title: asset.title, url: asset.previewUrl })
+      );
+    } catch {
+      // ignore
+    }
+    pushToast(`Applying "${asset.title}" in Product Customizer`, 'success');
+    onCustomizeProduct(productId);
+  };
+
+  // Global Sign-Out handler (signs out Supabase Auth + clears local profile)
+  const handleFullLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
+    }
+    onLogout();
+  };
+
+  // Navigation Helper
+  const goToTab = (tab: CustomerTab, sub?: AccountSubSection) => {
+    setActiveTab(tab);
+    if (sub) setAccountSubSection(sub);
+    setMobileDrawerOpen(false);
+    setOpenActionMenuId(null);
+  };
+
+  // Sidebar items definition
+  const primaryNavItems: Array<{
+    id: CustomerTab;
+    label: string;
+    icon: React.ReactNode;
+    badge?: number;
+  }> = [
+    { id: 'overview', label: 'Dashboard Overview', icon: <Home className="w-4 h-4" /> },
+    {
+      id: 'orders',
+      label: 'My Orders & Proofs',
+      icon: <Package className="w-4 h-4" />,
+      badge: totalOrdersCount,
+    },
+    { id: 'track', label: 'Track Consignment', icon: <Truck className="w-4 h-4" /> },
+    {
+      id: 'artworks',
+      label: 'My Artwork & Logos',
+      icon: <Palette className="w-4 h-4" />,
+      badge: brandAssetsCount,
+    },
+    { id: 'brand-assets', label: 'My Brand Assets', icon: <Layers className="w-4 h-4" /> },
+    { id: 'addresses', label: 'Saved Addresses', icon: <MapPin className="w-4 h-4" /> },
+    { id: 'gst-invoices', label: 'GST & Invoices', icon: <FileText className="w-4 h-4" /> },
+    { id: 'quotes', label: 'Bulk RFQ Enquiries', icon: <Building2 className="w-4 h-4" /> },
+    {
+      id: 'wishlist',
+      label: 'Saved Wishlist',
+      icon: <Heart className="w-4 h-4" />,
+      badge: wishlistProducts.length,
+    },
+  ];
+
+  // Shared Sidebar Content (Desktop fixed + Mobile Drawer)
+  const renderSidebarBody = () => (
+    <div className="flex flex-col h-full bg-gradient-to-b from-[#0B1530] via-[#091834] to-[#071B35] text-white select-none">
+      {/* Brand Logo */}
+      <div className="px-5 pt-5 pb-4 flex items-center justify-between border-b border-white/10">
+        <button
+          type="button"
+          onClick={() => onNavigateTab('home')}
+          className="flex items-center gap-2.5 text-left cursor-pointer group"
+        >
+          <div className="w-9 h-9 rounded-xl bg-[#FF7900] flex items-center justify-center font-display font-bold text-white text-lg shadow-lg shadow-[#FF7900]/30 group-hover:scale-105 transition-transform">
+            T
+          </div>
+          <div>
+            <div className="font-display font-bold text-lg tracking-tight leading-none text-white">
+              Teqqno<span className="text-[#FF7900]">World</span>
+            </div>
+            <div className="text-[9px] font-semibold tracking-widest text-slate-400 uppercase mt-1">
+              PRINTING · BRANDING · SOLUTIONS
+            </div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileDrawerOpen(false)}
+          aria-label="Close sidebar"
+          className="lg:hidden p-2 rounded-xl bg-white/10 text-white cursor-pointer"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Customer Profile Card inside Sidebar */}
+      <div className="px-5 py-5 flex flex-col items-center text-center border-b border-white/10">
+        <div className="relative">
+          <div className="w-20 h-20 rounded-full bg-white text-[#0B1530] flex items-center justify-center overflow-hidden border-[3px] border-white/85 shadow-xl">
+            {user.avatarUrl ? (
+              <img
+                src={user.avatarUrl}
+                alt={user.name}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span className="text-2xl font-bold font-display">
+                {user.name.charAt(0).toUpperCase()}
+              </span>
+            )}
+          </div>
+          <input
+            ref={sidebarAvatarInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/svg+xml"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleQuickAvatarUpload(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            disabled={uploadingAvatar}
+            onClick={() => sidebarAvatarInputRef.current?.click()}
+            title="Upload or change profile picture"
+            aria-label="Change profile picture"
+            className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-[#FF7900] hover:bg-[#ff8a20] text-white flex items-center justify-center border-2 border-[#0B1530] shadow-md cursor-pointer transition-transform hover:scale-105"
+          >
+            <Camera className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <h2 className="mt-3 text-sm font-bold text-white font-display leading-snug max-w-full truncate">
+          {user.name}
+        </h2>
+        <p className="text-[11px] text-slate-300 mt-0.5 max-w-full truncate">
+          {user.companyName || (user.accountType === 'business' ? 'Business Account' : 'Individual Customer')}
+        </p>
+
+        {/* Conditional Verified Account badge ONLY when user.isVerified is true */}
+        {user.isVerified && (
+          <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[11px] font-semibold">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Verified Account</span>
+          </div>
+        )}
+      </div>
+
+      {/* Navigation Links */}
+      <nav aria-label="Customer Dashboard Navigation" className="flex-1 overflow-y-auto px-3 py-3 space-y-1 no-scrollbar">
+        {primaryNavItems.map((item) => {
+          const active = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => goToTab(item.id)}
+              className={`w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[42px] ${
+                active
+                  ? 'bg-gradient-to-r from-[#FF7900] to-[#ff8c24] text-white shadow-md shadow-[#FF7900]/25'
+                  : 'text-slate-300 hover:text-white hover:bg-white/8'
+              }`}
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span className={active ? 'text-white' : 'text-slate-400'}>{item.icon}</span>
+                <span className="truncate">{item.label}</span>
+              </span>
+              {typeof item.badge === 'number' && item.badge > 0 && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums shrink-0 ${
+                    active ? 'bg-white/25 text-white' : 'bg-[#FF7900] text-white'
+                  }`}
+                >
+                  {item.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        {/* Collapsible Account & Security Menu */}
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => setAccountMenuExpanded((p) => !p)}
+            className={`w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[42px] ${
+              activeTab === 'account-security'
+                ? 'bg-white/12 text-white border border-white/15'
+                : 'text-slate-300 hover:text-white hover:bg-white/8'
+            }`}
+          >
+            <span className="flex items-center gap-2.5">
+              <Settings className="w-4 h-4 text-slate-400" />
+              <span>Account & Security</span>
+            </span>
+            <ChevronDown
+              className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                accountMenuExpanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          {accountMenuExpanded && (
+            <div className="mt-1 ml-4 pl-3 border-l border-white/10 space-y-1">
+              {(
+                [
+                  { id: 'profile', label: 'Update Profile' },
+                  { id: 'password', label: 'Change Password' },
+                  { id: 'notifications', label: 'Notification Preferences' },
+                  { id: 'gst', label: 'Billing & GST Details' },
+                  { id: 'security', label: 'Security Settings' },
+                ] as { id: AccountSubSection; label: string }[]
+              ).map((sub) => (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => goToTab('account-security', sub.id)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+                    activeTab === 'account-security' && accountSubSection === sub.id
+                      ? 'text-[#FF7900] bg-white/5 font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => goToTab('support')}
+          className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer min-h-[42px] ${
+            activeTab === 'support'
+              ? 'bg-gradient-to-r from-[#FF7900] to-[#ff8c24] text-white shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/8'
+          }`}
+        >
+          <HelpCircle className="w-4 h-4 text-slate-400" />
+          <span>Help & Support</span>
+        </button>
+      </nav>
+
+      {/* Bottom Promo Card */}
+      <div className="p-3.5">
+        <div className="rounded-2xl bg-gradient-to-br from-[#13254D] via-[#0F1E3F] to-[#081228] border border-white/10 p-4 relative overflow-hidden">
+          <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-[#FF7900]/25 blur-xl pointer-events-none" />
+          <div className="flex items-center gap-3 mb-2.5">
+            <img
+              src="/assets/categories/cat_gift_sets.webp"
+              alt="Corporate Gifting"
+              referrerPolicy="no-referrer"
+              className="w-11 h-11 rounded-xl object-cover border border-white/15 shrink-0"
+            />
+            <div className="text-xs font-bold leading-snug text-white">
+              Create, Customize and Order Easily
+            </div>
+          </div>
+          <ul className="space-y-1 text-[11px] text-slate-300">
+            <li className="flex items-center gap-1.5">
+              <span className="text-[#FF7900] font-bold">✓</span> Branded Products
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span className="text-[#FF7900] font-bold">✓</span> Corporate Gifting
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span className="text-[#FF7900] font-bold">✓</span> Bulk & Custom Orders
+            </li>
+          </ul>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('customizer')}
+            aria-label="Start new custom order"
+            className="mt-3 w-full py-2 px-3 rounded-xl bg-white/10 hover:bg-[#FF7900] text-white text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
+          >
+            <span>Start Customizing</span>
+            <span className="w-6 h-6 rounded-full bg-[#FF7900] flex items-center justify-center">
+              <ArrowRight className="w-3.5 h-3.5 text-white" />
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Order Rows Renderer (shared between Overview Recent Orders & Full Orders Tab)
+  const renderOrderActions = (order: Order) => (
+    <div className="flex items-center justify-end gap-1.5 relative">
+      <button
+        type="button"
+        onClick={() => {
+          setDetailDrawerOrder(order);
+          setOpenActionMenuId(null);
+        }}
+        className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+      >
+        <Eye className="w-3 h-3" />
+        <span className="hidden xl:inline">View</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onSelectOrderProof(order)}
+        className="px-2.5 py-1.5 rounded-lg bg-[#0B1530] hover:bg-[#132550] text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+      >
+        <span>Proof Studio</span>
+        <ExternalLink className="w-3 h-3 text-[#FF7900]" />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setTrackTargetOrder(order);
+          goToTab('track');
+        }}
+        className="px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+      >
+        <MapPin className="w-3 h-3 text-slate-500" />
+        <span>Track</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onReorder(order);
+          pushToast(`Added items from #${order.orderNumber} to cart`, 'success');
+        }}
+        className="px-2.5 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 border border-orange-200/80 text-[#FF7900] text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+      >
+        <ShoppingBag className="w-3 h-3" />
+        <span>Reorder</span>
+      </button>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() =>
+            setOpenActionMenuId((prev) => (prev === order.id ? null : order.id))
+          }
+          aria-label={`More actions for ${order.orderNumber}`}
+          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 cursor-pointer"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+
+        {openActionMenuId === order.id && (
+          <div className="absolute right-0 mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-30 text-left">
+            <button
+              type="button"
+              onClick={() => {
+                setDetailDrawerOrder(order);
+                setOpenActionMenuId(null);
+              }}
+              className="w-full px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5 text-slate-500" />
+              <span>View Order Details</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const ok = generateOrderTaxInvoicePdf(order);
+                setOpenActionMenuId(null);
+                pushToast(
+                  ok ? `Downloaded Tax Invoice for #${order.orderNumber}` : 'PDF error',
+                  ok ? 'success' : 'error'
+                );
+              }}
+              className="w-full px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Download GST Invoice PDF</span>
+            </button>
+            <a
+              href={getWhatsAppLink(`Hi TeqqnoWorld, help with Order #${order.orderNumber}`)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setOpenActionMenuId(null)}
+              className="w-full px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-[#1EBE5D]" />
+              <span>WhatsApp Support</span>
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // Manage Account 8-Tile Palette
+  const accountTiles: Array<{
+    title: string;
+    icon: React.ReactNode;
+    cardClass: string;
+    iconColor: string;
+    action: () => void;
+  }> = [
+    {
+      title: 'Update Profile',
+      icon: <User className="w-5 h-5" />,
+      cardClass: 'bg-purple-50/80 hover:bg-purple-100/80 border-purple-200/70',
+      iconColor: 'text-purple-600',
+      action: () => goToTab('account-security', 'profile'),
+    },
+    {
+      title: 'Change Password',
+      icon: <Lock className="w-5 h-5" />,
+      cardClass: 'bg-rose-50/80 hover:bg-rose-100/80 border-rose-200/70',
+      iconColor: 'text-rose-600',
+      action: () => goToTab('account-security', 'password'),
+    },
+    {
+      title: 'Manage & Brand Kit',
+      icon: <Palette className="w-5 h-5" />,
+      cardClass: 'bg-emerald-50/80 hover:bg-emerald-100/80 border-emerald-200/70',
+      iconColor: 'text-emerald-600',
+      action: () => goToTab('brand-assets'),
+    },
+    {
+      title: 'Saved Addresses',
+      icon: <MapPin className="w-5 h-5" />,
+      cardClass: 'bg-violet-50/80 hover:bg-violet-100/80 border-violet-200/70',
+      iconColor: 'text-violet-600',
+      action: () => goToTab('addresses'),
+    },
+    {
+      title: 'Notification Preferences',
+      icon: <Bell className="w-5 h-5" />,
+      cardClass: 'bg-orange-50/80 hover:bg-orange-100/80 border-orange-200/70',
+      iconColor: 'text-[#FF7900]',
+      action: () => goToTab('account-security', 'notifications'),
+    },
+    {
+      title: 'Billing & GST Details',
+      icon: <FileText className="w-5 h-5" />,
+      cardClass: 'bg-sky-50/80 hover:bg-sky-100/80 border-sky-200/70',
+      iconColor: 'text-sky-600',
+      action: () => goToTab('gst-invoices'),
+    },
+    {
+      title: 'Order History & Downloads',
+      icon: <Download className="w-5 h-5" />,
+      cardClass: 'bg-teal-50/80 hover:bg-teal-100/80 border-teal-200/70',
+      iconColor: 'text-teal-600',
+      action: () => goToTab('orders'),
+    },
+    {
+      title: 'Account Settings',
+      icon: <SlidersHorizontal className="w-5 h-5" />,
+      cardClass: 'bg-indigo-50/80 hover:bg-indigo-100/80 border-indigo-200/70',
+      iconColor: 'text-indigo-600',
+      action: () => goToTab('account-security', 'security'),
+    },
   ];
 
   return (
-    <div className="min-h-screen bg-[#F4F2FA] text-[#0B0B0D] py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-6">
-
-        {/* 1. Header Profile Strip */}
-        <div className="bg-[#0B0B0D] text-white rounded-3xl p-6 sm:p-8 border border-zinc-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#FF7A00] to-amber-500 flex items-center justify-center text-white font-display font-bold text-2xl shadow-lg shadow-[#FF7A00]/25">
-              {user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-            </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-bold font-display text-white tracking-tight">
-                  Welcome back, {user.name}!
-                </h1>
-                <span className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-semibold px-2.5 py-0.5 rounded-full">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Verified B2B Account</span>
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-400 mt-1">
-                <span>📱 +91 {user.mobile}</span>
-                <span>•</span>
-                <span>🏢 {user.companyName || 'Corporate Client'}</span>
-                {user.gstin && (
-                  <>
-                    <span>•</span>
-                    <span className="font-mono text-zinc-300">GSTIN: {user.gstin}</span>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onNavigateTab('catalog')}
-              className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-md transition-all flex items-center gap-1.5 group cursor-pointer"
-            >
-              <Plus className="w-4 h-4 group-hover:rotate-90 group-hover:scale-125 transition-transform duration-300" />
-              <span>New Custom Order</span>
-            </button>
-            <button
-              onClick={onLogout}
-              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-semibold px-4 py-2.5 rounded-xl transition-colors flex items-center gap-1.5 group cursor-pointer"
-            >
-              <LogOut className="w-4 h-4 group-hover:-translate-x-1 transition-transform duration-300" />
-              <span>Logout</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 2. Main Dashboard Container: Sidebar + Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-          
-          {/* Mobile & Tablet Horizontal Tab Navigation Bar (Sticky & Scrollable) */}
-          <div className="lg:hidden w-full bg-white rounded-2xl border border-zinc-200/90 shadow-xs p-2 sticky top-18 z-30">
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1 px-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id as DashboardTab)}
-                    className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs whitespace-nowrap transition-all shrink-0 min-h-[44px] cursor-pointer ${
-                      isActive 
-                        ? 'bg-[#0B0B0D] text-white font-bold shadow-xs' 
-                        : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
-                    }`}
-                  >
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#FF7A00]' : 'text-zinc-500'}`} />
-                    <span>{item.label}</span>
-                    {item.badge !== undefined && item.badge > 0 && (
-                      <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
-                        isActive ? 'bg-[#FF7A00] text-white' : 'bg-white text-zinc-700'
-                      }`}>
-                        {item.badge}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Desktop Left Sidebar Navigation */}
-          <div className="hidden lg:block lg:col-span-1 bg-white rounded-3xl border border-zinc-200/90 shadow-sm p-3 space-y-1">
-            <div className="px-3 py-2 text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-400">
-              Corporate Account Portal
-            </div>
-
-            <nav className="space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id as DashboardTab)}
-                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all group cursor-pointer ${
-                      isActive 
-                        ? 'bg-[#0B0B0D] text-white font-semibold shadow-xs' 
-                        : 'text-zinc-600 hover:bg-zinc-100 hover:text-[#0B0B0D]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Icon className={`w-4 h-4 transition-transform duration-300 group-hover:scale-120 ${isActive ? 'text-[#FF7A00]' : 'text-zinc-400 group-hover:text-[#FF7A00]'}`} />
-                      <span>{item.label}</span>
-                    </div>
-                    {item.badge !== undefined && item.badge > 0 && (
-                      <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
-                        isActive ? 'bg-[#FF7A00] text-white' : 'bg-zinc-100 text-zinc-600'
-                      }`}>
-                        {item.badge}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="pt-3 border-t border-zinc-100 px-3 pb-2 text-[11px] text-zinc-500 space-y-2">
-              <div className="flex items-center gap-1.5 text-zinc-700 font-semibold group cursor-default">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 animate-icon-pulse-glow" />
-                <span>GST Verified Partner</span>
-              </div>
-              <p className="text-[10px] text-zinc-400">
-                Direct printing manufacturer with 100% in-house DTF, Embroidery, and Laser Engraving labs.
-              </p>
-            </div>
-          </div>
-
-          {/* Right Main Content Area */}
-          <div className="lg:col-span-3 space-y-6">
-
-            {/* TAB 1: OVERVIEW */}
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                
-                {/* 4 KPI Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="bg-white p-5 rounded-2xl border border-zinc-200/90 shadow-2xs">
-                    <div className="w-9 h-9 rounded-xl bg-orange-50 text-[#FF7A00] flex items-center justify-center mb-3">
-                      <Package className="w-5 h-5" />
-                    </div>
-                    <div className="text-2xl font-bold font-display text-[#0B0B0D]">{orders.length}</div>
-                    <div className="text-xs text-zinc-500 font-medium">Total Orders Placed</div>
-                  </div>
-
-                  <div className="bg-white p-5 rounded-2xl border border-zinc-200/90 shadow-2xs">
-                    <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center mb-3">
-                      <Clock className="w-5 h-5" />
-                    </div>
-                    <div className="text-2xl font-bold font-display text-[#0B0B0D]">
-                      {orders.filter(o => o.orderStatus !== 'Delivered').length}
-                    </div>
-                    <div className="text-xs text-zinc-500 font-medium">Active In Production</div>
-                  </div>
-
-                  <div className="bg-white p-5 rounded-2xl border border-zinc-200/90 shadow-2xs">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3">
-                      <Receipt className="w-5 h-5" />
-                    </div>
-                    <div className="text-2xl font-bold font-display text-[#0B0B0D]">{invoices.length}</div>
-                    <div className="text-xs text-zinc-500 font-medium">ITC Tax Invoices</div>
-                  </div>
-
-                  <div className="bg-white p-5 rounded-2xl border border-zinc-200/90 shadow-2xs">
-                    <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center mb-3">
-                      <Palette className="w-5 h-5" />
-                    </div>
-                    <div className="text-2xl font-bold font-display text-[#0B0B0D]">{artworks.length}</div>
-                    <div className="text-xs text-zinc-500 font-medium">Vector Brand Assets</div>
-                  </div>
-                </div>
-
-                {/* Quick Actions Strip */}
-                <div className="bg-white p-5 rounded-2xl border border-zinc-200/90 shadow-2xs flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs font-semibold text-[#0B0B0D]">
-                    Quick Corporate Actions:
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => onNavigateTab('quote-calculator')}
-                      className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-[#FF7A00]" />
-                      <span>B2B Quote Calculator</span>
-                    </button>
-                    <button
-                      onClick={() => onNavigateTab('bundle-builder')}
-                      className="bg-orange-50 hover:bg-orange-100 text-[#FF7A00] border border-orange-200 text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Gift Bundle Builder</span>
-                    </button>
-                    <button
-                      onClick={() => onCustomizeProduct('prod-polo-01')}
-                      className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <span>Customizer Studio</span>
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('track')}
-                      className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Truck className="w-3.5 h-3.5 text-zinc-500" />
-                      <span>Track Delhivery Express</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Recent Orders Overview */}
-                <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-display font-bold text-base text-[#0B0B0D]">Recent Orders</h3>
-                      <p className="text-xs text-zinc-500">Live manufacturing status and digital proof reviews</p>
-                    </div>
-                    <button
-                      onClick={() => setActiveTab('orders')}
-                      className="text-xs text-[#FF7A00] font-semibold hover:underline flex items-center gap-1"
-                    >
-                      <span>View All ({orders.length})</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {orders.length === 0 ? (
-                    <div className="py-12 text-center text-zinc-500 text-xs">
-                      No orders yet. Start with our Customizer Studio!
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {orders.slice(0, 3).map((order) => (
-                        <div
-                          key={order.id}
-                          className="p-4 rounded-xl border border-zinc-200 hover:border-[#FF7A00]/50 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono font-bold text-xs text-[#0B0B0D]">{order.orderNumber}</span>
-                              <span className="text-[11px] text-zinc-400">
-                                {new Date(order.createdAt).toLocaleDateString('en-IN', {
-                                  day: 'numeric',
-                                  month: 'short',
-                                  year: 'numeric'
-                                })}
-                              </span>
-                              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                                order.orderStatus === 'Delivered' 
-                                  ? 'bg-emerald-100 text-emerald-800' 
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}>
-                                {order.orderStatus}
-                              </span>
-                            </div>
-
-                            <div className="text-xs text-zinc-600">
-                              {order.items.map(i => `${i.quantity}x ${i.product.name}`).join(', ')}
-                            </div>
-                            <div className="text-xs font-mono font-semibold text-zinc-900">
-                              Total: ₹{order.total.toLocaleString('en-IN')} (incl. 18% GST)
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              onClick={() => {
-                                onSelectOrderProof(order);
-                                onNavigateTab('orders');
-                              }}
-                              className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                            >
-                              <span>Proof Studio</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setSelectedTrackOrder(order);
-                                setActiveTab('track');
-                              }}
-                              className="bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                            >
-                              <Truck className="w-3 h-3" />
-                              <span>Track</span>
-                            </button>
-                            <button
-                              onClick={() => onReorder(order)}
-                              className="bg-orange-50 hover:bg-orange-100 text-[#FF7A00] text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              <span>Reorder</span>
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Active Artwork Snapshot */}
-                <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-display font-bold text-base text-[#0B0B0D]">Master Brand Assets</h3>
-                      <p className="text-xs text-zinc-500">Vector logos approved for machine calibration & embroidery</p>
-                    </div>
-                    <button
-                      onClick={() => setActiveTab('artworks')}
-                      className="text-xs text-[#FF7A00] font-semibold hover:underline flex items-center gap-1"
-                    >
-                      <span>Manage Artworks</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {artworks.slice(0, 2).map((art) => (
-                      <div key={art.id} className="p-3 rounded-xl border border-zinc-200 flex items-center gap-3">
-                        <img 
-                          src={art.previewUrl} 
-                          alt={art.title} 
-                          width={48}
-                          height={48}
-                          loading="lazy"
-                          decoding="async"
-                          className="w-12 h-12 object-cover rounded-lg border border-zinc-200 shrink-0" 
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="font-semibold text-xs text-[#0B0B0D] truncate">{art.title}</div>
-                          <div className="text-[11px] font-mono text-zinc-400">{art.fileName} • {art.fileSize}</div>
-                          <span className="inline-block mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                            {art.status}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-              </div>
-            )}
-
-            {/* TAB 2: MY ORDERS */}
-            {activeTab === 'orders' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">My Orders & Digital Proofs</h3>
-                  <p className="text-xs text-zinc-500">
-                    Track factory progress, inspect Pantone proofs, reorder batches, and retrieve GST invoices.
-                  </p>
-                </div>
-
-                {/* Search & Filter Controls */}
-                <div className="flex flex-col sm:flex-row gap-3 justify-between items-stretch sm:items-center">
-                  <div className="relative flex-1 max-w-sm">
-                    <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      placeholder="Search Order ID or product..."
-                      value={orderSearchQuery}
-                      onChange={(e) => setOrderSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-300 rounded-xl outline-none focus:border-[#FF7A00]"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
-                    {(['All', 'Confirmed', 'Artwork Verification', 'Dispatched', 'Delivered'] as const).map((status) => (
-                      <button
-                        key={status}
-                        onClick={() => setOrderStatusFilter(status)}
-                        className={`px-3 py-1.5 rounded-lg font-medium whitespace-nowrap transition-colors ${
-                          orderStatusFilter === status
-                            ? 'bg-[#0B0B0D] text-white font-semibold'
-                            : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                        }`}
-                      >
-                        {status}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Orders List */}
-                {filteredOrders.length === 0 ? (
-                  <div className="py-16 text-center space-y-3">
-                    <Package className="w-12 h-12 text-zinc-300 mx-auto" />
-                    <h4 className="font-semibold text-zinc-800 text-sm">No orders found</h4>
-                    <p className="text-xs text-zinc-500">Try adjusting your search query or filter</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {filteredOrders.map((order) => (
-                      <div 
-                        key={order.id} 
-                        className="p-5 rounded-2xl border border-zinc-200 hover:border-zinc-300 transition-all space-y-4 bg-zinc-50/50"
-                      >
-                        {/* Order Header */}
-                        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-zinc-200">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono font-bold text-sm text-[#0B0B0D]">{order.orderNumber}</span>
-                              <span className="text-xs text-zinc-500 font-medium">
-                                Placed on {new Date(order.createdAt).toLocaleDateString('en-IN', {
-                                  day: 'numeric',
-                                  month: 'short',
-                                  year: 'numeric'
-                                })}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-zinc-500 mt-0.5">
-                              Shipping to: {order.shippingAddress.fullName} · {order.shippingAddress.city}, {order.shippingAddress.state}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className={`text-xs font-mono font-semibold px-2.5 py-1 rounded-full ${
-                              order.proofStatus === 'Approved by Client'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              Proof: {order.proofStatus}
-                            </span>
-                            <span className="text-xs font-mono font-bold bg-zinc-900 text-white px-2.5 py-1 rounded-full">
-                              {order.orderStatus}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Order Line Items */}
-                        <div className="space-y-3">
-                          {order.items.map((item, idx) => (
-                            <div key={idx} className="flex items-center justify-between text-xs gap-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg bg-zinc-200 flex items-center justify-center font-bold text-zinc-600 text-[10px]">
-                                  {item.product.productType.slice(0, 3).toUpperCase()}
-                                </div>
-                                <div>
-                                  <div className="font-semibold text-zinc-900">{item.product.name}</div>
-                                  <div className="text-[11px] text-zinc-500">
-                                    Color: {item.color.name} {item.size ? `· Size: ${item.size}` : ''} · Print: {item.printMethod} ({item.printPlacement})
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="font-mono font-bold text-zinc-900">
-                                  {item.quantity} units @ ₹{item.unitPrice}
-                                </div>
-                                <div className="text-[11px] font-mono text-zinc-500">
-                                  ₹{item.totalPrice.toLocaleString('en-IN')}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Pricing & Footer Actions */}
-                        <div className="pt-3 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-                          <div>
-                            <span className="text-zinc-500">Grand Total: </span>
-                            <span className="font-mono font-bold text-sm text-[#0B0B0D]">
-                              ₹{order.total.toLocaleString('en-IN')}
-                            </span>
-                            <span className="text-[11px] text-zinc-400 font-mono ml-1.5">
-                              (incl. ₹{order.gstAmount.toLocaleString('en-IN')} GST)
-                            </span>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              onClick={() => {
-                                onSelectOrderProof(order);
-                                onNavigateTab('orders');
-                              }}
-                              className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3.5 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
-                            >
-                              <span>3D Digital Proof & Approval</span>
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={() => {
-                                setSelectedTrackOrder(order);
-                                setActiveTab('track');
-                              }}
-                              className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                            >
-                              <Truck className="w-3.5 h-3.5" />
-                              <span>Track Delhivery</span>
-                            </button>
-
-                            <button
-                              onClick={() => {
-                                generateOrderTaxInvoicePdf(order);
-                              }}
-                              className="bg-zinc-100 hover:bg-[#FF7A00] hover:text-white text-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                              title="Download official B2B Tax Invoice (PDF)"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Download Invoice</span>
-                            </button>
-
-                            <button
-                              onClick={() => onReorder(order)}
-                              className="bg-orange-50 hover:bg-orange-100 text-[#FF7A00] text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                              <span>1-Click Reorder</span>
-                            </button>
-                          </div>
-                        </div>
-
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 3: TRACK ORDER & CONSIGNMENT */}
-            {activeTab === 'track' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Live Consignment Milestone Tracker</h3>
-                  <p className="text-xs text-zinc-500">
-                    Integrated with Delhivery One Express &amp; Surface for time-sensitive corporate shipments.
-                  </p>
-                </div>
-
-                {/* Order Selector */}
-                <div className="flex flex-wrap items-center gap-3 p-3 bg-zinc-50 rounded-xl border border-zinc-200 text-xs">
-                  <span className="font-semibold text-zinc-700">Select Order to Track:</span>
-                  <select
-                    value={selectedTrackOrder?.id}
-                    onChange={(e) => {
-                      const found = orders.find(o => o.id === e.target.value);
-                      if (found) setSelectedTrackOrder(found);
-                    }}
-                    className="bg-white border border-zinc-300 rounded-lg px-2.5 py-1.5 text-xs font-mono font-medium outline-none focus:border-[#FF7A00]"
-                  >
-                    {orders.map(o => (
-                      <option key={o.id} value={o.id}>
-                        {o.orderNumber} ({o.items.length} items - ₹{o.total.toLocaleString('en-IN')})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {selectedTrackOrder && (
-                  <div className="space-y-6">
-                    {/* Airway Bill Badge Card */}
-                    <div className="p-4 rounded-xl bg-[#0B0B0D] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-mono text-[#FF7A00] uppercase tracking-wider font-semibold">
-                          COURIER PARTNER: {selectedTrackOrder.courierPartner || 'Delhivery Express'}
-                        </div>
-                        <div className="text-base font-mono font-bold flex items-center gap-2">
-                          <span>AWB: {selectedTrackOrder.trackingNumber || 'Awaiting Manifest'}</span>
-                          <button
-                            onClick={() => handleCopy(selectedTrackOrder.trackingNumber || 'BD-AIR-8920194812')}
-                            className="p-1 hover:text-[#FF7A00] text-zinc-400"
-                            title="Copy AWB"
-                          >
-                            {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
-                        <div className="text-xs text-zinc-400">
-                          Destination: {selectedTrackOrder.shippingAddress.city}, {selectedTrackOrder.shippingAddress.state} ({selectedTrackOrder.shippingAddress.pincode})
-                        </div>
-                      </div>
-
-                      <div className="text-left sm:text-right">
-                        <div className="text-[11px] text-zinc-400">Estimated Delivery:</div>
-                        <div className="text-sm font-bold text-white">
-                          {selectedTrackOrder.estimatedDispatch} (Air Express)
-                        </div>
-                        <span className="inline-block mt-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                          On Schedule
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* 6-Stage Milestone Progress Bar */}
-                    <div className="space-y-4 pt-2">
-                      <div className="text-xs font-semibold text-zinc-800">Manufacturing & Transit Timeline:</div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                        {[
-                          { title: '1. Order Received', desc: 'Specs recorded', done: true, time: 'Day 0' },
-                          { title: '2. Proof Signed', desc: 'Vector approved', done: true, time: 'Day 0 (+2h)' },
-                          { title: '3. Machine Run', desc: 'DTF / Embroidery', done: true, time: 'Day 1' },
-                          { title: '4. QC & Ironing', desc: 'Passed 10-pt check', done: true, time: 'Day 1' },
-                          { title: '5. Dispatched', desc: 'Handed to Delhivery', done: false, time: 'Day 2' },
-                          { title: '6. Delivered', desc: 'Signed at dock', done: false, time: 'Day 3' },
-                        ].map((stage, idx) => (
-                          <div 
-                            key={idx} 
-                            className={`p-3 rounded-xl border text-xs space-y-1 ${
-                              stage.done 
-                                ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950' 
-                                : 'bg-zinc-50 border-zinc-200 text-zinc-500'
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5 font-bold">
-                              {stage.done ? (
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                              ) : (
-                                <Clock className="w-4 h-4 text-zinc-400 shrink-0" />
-                              )}
-                              <span className="text-[11px] truncate">{stage.title}</span>
-                            </div>
-                            <div className="text-[10px] opacity-80">{stage.desc}</div>
-                            <div className="text-[9px] font-mono font-semibold text-zinc-500">{stage.time}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Checkpoints Log */}
-                    <div className="bg-zinc-50 rounded-xl p-4 border border-zinc-200 space-y-3 text-xs">
-                      <div className="font-semibold text-zinc-800">Scanned Hub Events:</div>
-                      <div className="space-y-2 font-mono text-[11px]">
-                        <div className="flex items-start gap-2 text-zinc-800">
-                          <span className="text-emerald-600 font-bold">• 10:45 AM</span>
-                          <span>Factory Finished Goods Bay: Quality Inspector cleared 50 units. Polybag sealed.</span>
-                        </div>
-                        <div className="flex items-start gap-2 text-zinc-800">
-                          <span className="text-emerald-600 font-bold">• 08:30 AM</span>
-                          <span>Embroidery Lab #3: High-speed Tajima heads completed left-chest crest.</span>
-                        </div>
-                        <div className="flex items-start gap-2 text-zinc-600">
-                          <span className="text-zinc-400 font-bold">• Yesterday</span>
-                          <span>Pre-press Studio: Color separation & underbase white density approved.</span>
-                        </div>
-                      </div>
-                    </div>
-
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 4: MY ARTWORK & LOGOS */}
-            {activeTab === 'artworks' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-display font-bold text-lg text-[#0B0B0D]">My Brand Artworks & Vector Assets</h3>
-                    <p className="text-xs text-zinc-500">
-                      Store master vector logos (.AI, .EPS, .SVG, .PDF, high-res PNG) for instant 1-click product application.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Upload New Artwork Box */}
-                <form onSubmit={handleUploadArtwork} className="p-4 rounded-xl border border-dashed border-[#FF7A00] bg-orange-50/30 space-y-3">
-                  <div className="flex items-center gap-2 text-xs font-bold text-zinc-900">
-                    <Upload className="w-4 h-4 text-[#FF7A00]" />
-                    <span>Upload New High-Resolution Brand Artwork</span>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="text"
-                      placeholder="Artwork Title (e.g. Acme Primary Horizontal CMYK Logo)"
-                      value={newArtworkTitle}
-                      onChange={(e) => setNewArtworkTitle(e.target.value)}
-                      className="flex-1 px-3 py-2 text-xs border border-zinc-300 rounded-lg outline-none bg-white focus:border-[#FF7A00]"
-                    />
-                    <button
-                      type="submit"
-                      disabled={isUploadingArtwork || !newArtworkTitle.trim()}
-                      className="bg-[#0B0B0D] hover:bg-zinc-800 disabled:bg-zinc-400 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-                    >
-                      {isUploadingArtwork ? <span>Uploading & Validating...</span> : <span>Upload Asset</span>}
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-zinc-500">
-                    Supports .AI, .EPS, .PDF, .SVG, .CDR, and transparent PNGs up to 50MB. Pre-press validated for 300 DPI.
-                  </p>
-                  {artworkUploadSuccess && (
-                    <div className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Artwork uploaded and pre-press verified successfully!</span>
-                    </div>
-                  )}
-                </form>
-
-                {/* Artworks Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {artworks.map((art) => (
-                    <div 
-                      key={art.id} 
-                      className="p-4 rounded-xl border border-zinc-200 hover:border-[#FF7A00]/50 transition-all space-y-3 bg-white"
-                    >
-                      <div className="flex items-start gap-3">
-                        <img 
-                          src={art.previewUrl} 
-                          alt={art.title} 
-                          width={64}
-                          height={64}
-                          loading="lazy"
-                          decoding="async"
-                          className="w-16 h-16 object-cover rounded-xl border border-zinc-200 shrink-0" 
-                        />
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <h4 className="font-semibold text-xs text-[#0B0B0D] truncate">{art.title}</h4>
-                          <div className="text-[11px] font-mono text-zinc-400">{art.fileName}</div>
-                          <div className="text-[10px] text-zinc-500">{art.resolution}</div>
-                          <span className="inline-block text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                            {art.status}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-xs">
-                        <span className="text-[11px] text-zinc-400 font-mono">
-                          Used in {art.associatedOrdersCount} order(s)
-                        </span>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => onCustomizeProduct('prod-polo-01')}
-                            className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-3 py-1 rounded-lg transition-colors flex items-center gap-1"
-                          >
-                            <Sparkles className="w-3 h-3" />
-                            <span>Apply to Product</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* TAB 5: SAVED ADDRESSES */}
-            {activeTab === 'addresses' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Saved Delivery & Billing Addresses</h3>
-                    <p className="text-xs text-zinc-500">
-                      Manage warehouse docks, headquarters, and regional dispatch locations for streamlined checkouts.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setEditingAddress(null);
-                      setAddressFormData({
-                        title: 'Regional Office',
-                        fullName: user.name,
-                        companyName: user.companyName || '',
-                        phone: user.mobile,
-                        street: '',
-                        city: 'Bengaluru',
-                        state: 'Karnataka',
-                        pincode: '560001',
-                        isDefault: false,
-                        type: 'shipping',
-                      });
-                      setIsAddressModalOpen(true);
-                    }}
-                    className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 self-start"
-                  >
-                    <Plus className="w-4 h-4 text-[#FF7A00]" />
-                    <span>Add New Address</span>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {addresses.map((addr) => (
-                    <div 
-                      key={addr.id} 
-                      className={`p-4 rounded-xl border transition-all space-y-3 ${
-                        addr.isDefault ? 'border-[#FF7A00] bg-orange-50/20' : 'border-zinc-200 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-[#0B0B0D]">{addr.title}</span>
-                          {addr.isDefault && (
-                            <span className="text-[10px] bg-[#FF7A00] text-white px-2 py-0.2 rounded-full font-semibold">
-                              DEFAULT
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
-                          {addr.type}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-zinc-700 space-y-0.5">
-                        <div className="font-semibold text-zinc-900">{addr.fullName}</div>
-                        {addr.companyName && <div className="text-zinc-600">{addr.companyName}</div>}
-                        <div className="text-zinc-600">{addr.street}</div>
-                        <div className="text-zinc-600">{addr.city}, {addr.state} - {addr.pincode}</div>
-                        <div className="text-zinc-500 font-mono mt-1">Contact: {addr.phone}</div>
-                      </div>
-
-                      <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-xs">
-                        {!addr.isDefault && (
-                          <button
-                            onClick={() => {
-                              const updated = addresses.map(a => ({ ...a, isDefault: a.id === addr.id }));
-                              setAddresses(updated);
-                              onUpdateUser({ ...user, savedAddresses: updated });
-                            }}
-                            className="text-[#FF7A00] hover:underline font-semibold"
-                          >
-                            Set as Default
-                          </button>
-                        )}
-                        <div className="flex items-center gap-2 ml-auto">
-                          <button
-                            onClick={() => {
-                              setEditingAddress(addr);
-                              setAddressFormData({ 
-                                ...addr, 
-                                companyName: addr.companyName || '' 
-                              });
-                              setIsAddressModalOpen(true);
-                            }}
-                            className="text-zinc-600 hover:text-zinc-900 font-semibold"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteAddress(addr.id)}
-                            className="text-red-500 hover:text-red-700 p-1"
-                            title="Delete Address"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Add / Edit Address Modal */}
-                {isAddressModalOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-                    <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-zinc-200">
-                      <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
-                        <h4 className="font-display font-bold text-base text-[#0B0B0D]">
-                          {editingAddress ? 'Edit Address' : 'Add New Address'}
-                        </h4>
-                        <button onClick={() => setIsAddressModalOpen(false)} className="text-zinc-400 hover:text-zinc-700">
-                          ✕
-                        </button>
-                      </div>
-
-                      <form onSubmit={handleSaveAddress} className="space-y-3 text-xs">
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">Label / Title</label>
-                            <input
-                              type="text"
-                              value={addressFormData.title}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, title: e.target.value })}
-                              placeholder="e.g. Bengaluru HQ"
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">Contact Name</label>
-                            <input
-                              type="text"
-                              value={addressFormData.fullName}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, fullName: e.target.value })}
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">Company (Optional)</label>
-                            <input
-                              type="text"
-                              value={addressFormData.companyName}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, companyName: e.target.value })}
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">Phone Number</label>
-                            <input
-                              type="text"
-                              value={addressFormData.phone}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, phone: e.target.value })}
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block font-semibold text-zinc-700 mb-1">Street Address</label>
-                          <textarea
-                            rows={2}
-                            value={addressFormData.street}
-                            onChange={(e) => setAddressFormData({ ...addressFormData, street: e.target.value })}
-                            placeholder="Building, street, landmark, floor..."
-                            required
-                            className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">City</label>
-                            <input
-                              type="text"
-                              value={addressFormData.city}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, city: e.target.value })}
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">State</label>
-                            <input
-                              type="text"
-                              value={addressFormData.state}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, state: e.target.value })}
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block font-semibold text-zinc-700 mb-1">Pincode</label>
-                            <input
-                              type="text"
-                              value={addressFormData.pincode}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, pincode: e.target.value })}
-                              required
-                              className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="pt-2 flex items-center justify-between">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={addressFormData.isDefault}
-                              onChange={(e) => setAddressFormData({ ...addressFormData, isDefault: e.target.checked })}
-                              className="rounded text-[#FF7A00] focus:ring-[#FF7A00]"
-                            />
-                            <span className="text-zinc-700 font-medium">Set as primary default address</span>
-                          </label>
-
-                          <button
-                            type="submit"
-                            className="bg-[#0B0B0D] hover:bg-zinc-800 text-white font-semibold px-4 py-2 rounded-lg transition-colors"
-                          >
-                            Save Address
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 6: GST & CORPORATE TAX */}
-            {activeTab === 'gst' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">GST & Input Tax Credit (ITC) Portal</h3>
-                  <p className="text-xs text-zinc-500">
-                    SAC Code 9989 (Custom Printing Services) ensures 100% 18% Input Tax Credit claim in monthly GSTR-2B.
-                  </p>
-                </div>
-
-                <div className="p-5 rounded-2xl bg-[#0B0B0D] text-white space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                      <span className="font-bold text-sm">Verified Corporate GSTIN Profile</span>
-                    </div>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                      ITC ELIGIBLE
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-zinc-800 text-xs">
-                    <div>
-                      <div className="text-zinc-400 text-[11px]">Registered Entity</div>
-                      <div className="font-semibold text-white mt-0.5">{user.companyName || 'FinPulse Technologies Pvt Ltd'}</div>
-                    </div>
-                    <div>
-                      <div className="text-zinc-400 text-[11px]">15-Digit GSTIN</div>
-                      <div className="font-mono font-bold text-[#FF7A00] mt-0.5">{user.gstin || '29AAACN1234F1Z8'}</div>
-                    </div>
-                    <div>
-                      <div className="text-zinc-400 text-[11px]">State of Supply</div>
-                      <div className="font-medium text-white mt-0.5">Karnataka (State Code 29)</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Tax Benefits Breakdown */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50 space-y-1 text-xs">
-                    <div className="font-bold text-zinc-900">SAC Code 9989</div>
-                    <p className="text-zinc-500 text-[11px]">
-                      Recognized under HSN/SAC chapter 99 for commercial offset, digital printing, and branding services.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50 space-y-1 text-xs">
-                    <div className="font-bold text-zinc-900">18% ITC Reversal Protection</div>
-                    <p className="text-zinc-500 text-[11px]">
-                      Invoices automatically upload to the GST Portal for seamless auto-population into your CA's GSTR-2B.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50 space-y-1 text-xs">
-                    <div className="font-bold text-zinc-900">Annual Expense Reconciliation</div>
-                    <p className="text-zinc-500 text-[11px]">
-                      Download 1-click consolidated Excel & PDF expense statements for your financial year audits.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-2 flex items-center justify-between">
-                  <span className="text-xs text-zinc-500">Need to update your corporate tax credentials?</span>
-                  <button
-                    onClick={() => setActiveTab('settings')}
-                    className="text-xs text-[#FF7A00] font-semibold hover:underline"
-                  >
-                    Edit GSTIN in Account Settings →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 7: TAX INVOICES */}
-            {activeTab === 'invoices' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Official B2B Tax Invoices</h3>
-                  <p className="text-xs text-zinc-500">
-                    Compliant with Rule 46 of the CGST Rules, 2017. Download or print authorized tax documents.
-                  </p>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-zinc-200 text-zinc-500 font-mono text-[11px]">
-                        <th className="pb-3 font-semibold">INVOICE #</th>
-                        <th className="pb-3 font-semibold">DATE</th>
-                        <th className="pb-3 font-semibold">ORDER REF</th>
-                        <th className="pb-3 font-semibold">TAXABLE</th>
-                        <th className="pb-3 font-semibold">18% GST</th>
-                        <th className="pb-3 font-semibold">TOTAL (INR)</th>
-                        <th className="pb-3 font-semibold text-right">ACTION</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-100">
-                      {invoices.map((inv) => (
-                        <tr key={inv.id} className="hover:bg-zinc-50/80 transition-colors">
-                          <td className="py-3 font-mono font-bold text-zinc-900">{inv.invoiceNumber}</td>
-                          <td className="py-3 text-zinc-600 font-mono">{inv.date}</td>
-                          <td className="py-3 font-mono text-[#FF7A00]">{inv.orderNumber}</td>
-                          <td className="py-3 font-mono text-zinc-700">₹{inv.taxableValue.toLocaleString('en-IN')}</td>
-                          <td className="py-3 font-mono text-zinc-700">
-                            ₹{(inv.cgst + inv.sgst + inv.igst).toLocaleString('en-IN')}
-                          </td>
-                          <td className="py-3 font-mono font-bold text-zinc-900">
-                            ₹{inv.totalAmount.toLocaleString('en-IN')}
-                          </td>
-                          <td className="py-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => generateTaxInvoicePdf(inv, user)}
-                                className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-all inline-flex items-center gap-1 cursor-pointer shadow-xs"
-                                title="Download PDF Tax Invoice"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                <span>PDF</span>
-                              </button>
-                              <button
-                                onClick={() => setActiveInvoicePreview(inv)}
-                                className="bg-zinc-100 hover:bg-[#0B0B0D] hover:text-white text-zinc-800 text-xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1 cursor-pointer"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                <span>View</span>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 8: WISHLIST */}
-            {activeTab === 'wishlist' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Saved Merchandise Wishlist</h3>
-                  <p className="text-xs text-zinc-500">Shortlisted corporate gifts and custom team apparel</p>
-                </div>
-
-                {wishlist.length === 0 ? (
-                  <div className="py-12 text-center text-zinc-500 text-xs">
-                    Your wishlist is empty. Explore our catalog!
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {wishlist.map((prod) => (
-                      <div key={prod.id} className="p-4 rounded-xl border border-zinc-200 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-xs text-zinc-900">{prod.name}</div>
-                          <div className="text-[11px] text-zinc-500">{prod.shortDesc}</div>
-                          <div className="text-xs font-mono font-bold text-[#FF7A00] mt-1">
-                            Starts ₹{prod.basePrice} / unit (MOQ: {prod.moq})
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1.5 shrink-0">
-                          <button
-                            onClick={() => onCustomizeProduct(prod.id)}
-                            className="bg-[#0B0B0D] text-white hover:bg-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-                          >
-                            <Sparkles className="w-3 h-3 text-[#FF7A00]" />
-                            <span>Customize</span>
-                          </button>
-                          <button
-                            onClick={() => setWishlist(wishlist.filter(p => p.id !== prod.id))}
-                            className="text-zinc-400 hover:text-red-500 text-[10px] text-center"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 9: BULK RFQ QUOTES */}
-            {activeTab === 'quotes' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Corporate Bulk RFQ Enquiries</h3>
-                    <p className="text-xs text-zinc-500">Volume orders (50 to 10,000+ units) with dedicated account manager pricing</p>
-                  </div>
-                  <button
-                    onClick={() => onNavigateTab('bulk')}
-                    className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-colors flex items-center gap-1.5 self-start"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>New Bulk Request</span>
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {bulkQuotes.map((rfq) => (
-                    <div key={rfq.id} className="p-4 rounded-xl border border-zinc-200 space-y-3 bg-zinc-50/50">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs text-zinc-900">{rfq.id.toUpperCase()}</span>
-                          <span className="text-xs text-zinc-500 font-medium">· {rfq.productCategory}</span>
-                        </div>
-                        <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                          {rfq.status}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-zinc-700">
-                        <p className="font-medium text-zinc-800">{rfq.customizationDetails}</p>
-                        <div className="flex items-center gap-4 text-zinc-500 text-[11px] mt-1">
-                          <span>Volume: <strong>{rfq.estimatedQty} units</strong></span>
-                          <span>Target: <strong>{rfq.targetDeliveryDate}</strong></span>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-zinc-200 flex items-center justify-between">
-                        <a
-                          href={getWhatsAppLink(`Hello TeqqnoWorld, following up on RFQ ${rfq.id} for ${rfq.estimatedQty} units`)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-[#1EBE5D] font-semibold hover:underline flex items-center gap-1.5"
-                        >
-                          <WhatsAppIcon variant="badge" className="w-4 h-4" />
-                          <span>Chat with Corporate KAM on WhatsApp</span>
-                        </a>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* TAB 10: NOTIFICATIONS & ALERTS */}
-            {activeTab === 'notifications' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Notifications & Production Alerts</h3>
-                    <p className="text-xs text-zinc-500">Live order status, digital proof notices, and corporate offers</p>
-                  </div>
-                  <button
-                    onClick={() => setNotifications(notifications.map(n => ({ ...n, read: true })))}
-                    className="text-xs text-zinc-500 hover:text-zinc-900"
-                  >
-                    Mark all as read
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {notifications.map((notif) => (
-                    <div 
-                      key={notif.id} 
-                      className={`p-4 rounded-xl border transition-all text-xs space-y-1 ${
-                        notif.read ? 'border-zinc-200 bg-white' : 'border-[#FF7A00]/50 bg-orange-50/20'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="font-bold text-zinc-900 flex items-center gap-2">
-                          {!notif.read && <span className="w-2 h-2 rounded-full bg-[#FF7A00]" />}
-                          <span>{notif.title}</span>
-                        </div>
-                        <span className="text-[10px] text-zinc-400 font-mono">{notif.timestamp}</span>
-                      </div>
-                      <p className="text-zinc-600">{notif.message}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* TAB 11: SETTINGS & PREFERENCES */}
-            {activeTab === 'settings' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Account Settings & Preferences</h3>
-                  <p className="text-xs text-zinc-500">Update corporate profile and invoice communication details</p>
-                </div>
-
-                <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Full Name</label>
-                      <input
-                        type="text"
-                        value={profileName}
-                        onChange={(e) => setProfileName(e.target.value)}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Work Email</label>
-                      <input
-                        type="email"
-                        value={profileEmail}
-                        onChange={(e) => setProfileEmail(e.target.value)}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Company / Organization</label>
-                      <input
-                        type="text"
-                        value={profileCompany}
-                        onChange={(e) => setProfileCompany(e.target.value)}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Company Role / Designation</label>
-                      <input
-                        type="text"
-                        value={profileDesignation}
-                        onChange={(e) => setProfileDesignation(e.target.value)}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none focus:border-[#FF7A00]"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-zinc-700 mb-1">15-Digit GSTIN Number</label>
-                    <input
-                      type="text"
-                      value={profileGstin}
-                      onChange={(e) => setProfileGstin(e.target.value.toUpperCase())}
-                      placeholder="e.g. 29AAACN1234F1Z8"
-                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg outline-none font-mono focus:border-[#FF7A00]"
-                    />
-                    <p className="text-[11px] text-zinc-400 mt-1">Used on all B2B Tax Invoices for ITC input claim.</p>
-                  </div>
-
-                  <div className="pt-2 flex items-center justify-between">
-                    <button
-                      type="submit"
-                      className="bg-[#0B0B0D] hover:bg-zinc-800 text-white font-semibold px-5 py-2.5 rounded-xl transition-colors"
-                    >
-                      Save Profile Changes
-                    </button>
-
-                    {profileSavedToast && (
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Profile updated successfully!</span>
-                      </span>
-                    )}
-                  </div>
-                </form>
-              </div>
-            )}
-
-            {/* TAB 12: HELP & SUPPORT */}
-            {activeTab === 'support' && (
-              <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-2xs p-6 space-y-6">
-                <div>
-                  <h3 className="font-display font-bold text-lg text-[#0B0B0D]">Customer & Corporate Support Hub</h3>
-                  <p className="text-xs text-zinc-500">Reach our dedicated print consultants and key account managers</p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <a
-                    href={getWhatsAppLink('Hello TeqqnoWorld, I need help with my corporate account')}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 transition-colors flex items-start gap-4 text-xs"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-[#1EBE5D] text-white flex items-center justify-center shrink-0">
-                      <WhatsAppIcon className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <div className="font-bold text-emerald-950 text-sm">Direct WhatsApp Desk</div>
-                      <div className="text-emerald-800 mt-0.5">{BUSINESS_CONFIG.contact.whatsapp}</div>
-                      <p className="text-[11px] text-emerald-700 mt-1">Instant assistance for mockups, pantone colors & urgent dispatches.</p>
-                    </div>
-                  </a>
-
-                  <a
-                    href={BUSINESS_CONFIG.contact.mailtoLink}
-                    className="p-5 rounded-2xl border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 transition-colors flex items-start gap-4 text-xs"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-zinc-900 text-white flex items-center justify-center shrink-0">
-                      <Mail className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="font-bold text-zinc-900 text-sm">Enterprise Procurement Email</div>
-                      <div className="text-zinc-700 mt-0.5">{BUSINESS_CONFIG.contact.email}</div>
-                      <p className="text-[11px] text-zinc-500 mt-1">Send purchase orders, vendor onboarding forms & NDA requests.</p>
-                    </div>
-                  </a>
-                </div>
-
-                <div className="bg-zinc-50 rounded-xl p-4 border border-zinc-200 text-xs text-zinc-600 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold text-zinc-900">Official Business Address</div>
-                    <a
-                      href={BUSINESS_CONFIG.maps.directionsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#FF7A00] hover:underline font-semibold flex items-center gap-1 text-[11px]"
-                    >
-                      <span>Google Maps</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                  <p className="text-[11px] text-zinc-700 leading-relaxed">
-                    {BUSINESS_CONFIG.address.full}
-                  </p>
-                </div>
-              </div>
-            )}
-
-          </div>
-        </div>
-
-      </div>
-
-      {/* 3. Authentic Printable GST Tax Invoice Modal */}
-      {activeInvoicePreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div id="printable-dashboard-invoice" className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl border border-zinc-300 max-h-[92vh] overflow-y-auto">
-            {/* Action Bar */}
-            <div className="no-print flex items-center justify-between pb-4 border-b border-zinc-200">
-              <div className="flex items-center gap-2">
-                <Receipt className="w-5 h-5 text-[#FF7A00]" />
-                <span className="font-bold text-sm text-[#0B0B0D]">Tax Invoice: {activeInvoicePreview.invoiceNumber}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => generateTaxInvoicePdf(activeInvoicePreview, user)}
-                  className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download PDF</span>
-                </button>
-                <button
-                  onClick={() => window.print()}
-                  className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Document</span>
-                </button>
-                <button
-                  onClick={() => setActiveInvoicePreview(null)}
-                  className="w-7 h-7 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-600 flex items-center justify-center text-xs font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* Official GST Invoice Paper Layout */}
-            <div className="border border-zinc-200 rounded-xl p-5 space-y-4 text-xs text-zinc-800 bg-[#FFF]">
-              {/* Header */}
-              <div className="flex justify-between items-start pb-4 border-b border-zinc-200">
-                <div>
-                  <div className="font-display font-bold text-lg text-[#0B0B0D]">
-                    Teqqno<span className="text-[#FF7A00]">World</span> Private Limited
-                  </div>
-                  <div className="text-[10px] text-zinc-500">
-                    {BUSINESS_CONFIG.address.line1}<br />
-                    {BUSINESS_CONFIG.address.line2}<br />
-                    GSTIN: 36AAACT9810P1Z2 | PAN: AAACT9810P<br />
-                    SAC Code: 9989 (Custom Printing & Branding Services)
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-bold font-mono text-zinc-900">ORIGINAL FOR RECIPIENT</div>
-                  <div className="text-[11px] font-mono text-zinc-600 mt-1">Invoice: {activeInvoicePreview.invoiceNumber}</div>
-                  <div className="text-[11px] font-mono text-zinc-600">Date: {activeInvoicePreview.date}</div>
-                </div>
-              </div>
-
-              {/* Bill To */}
-              <div className="grid grid-cols-2 gap-4 pb-4 border-b border-zinc-200 text-[11px]">
-                <div>
-                  <div className="font-bold text-zinc-900">BILLED TO (BUYER):</div>
-                  <div>{user.companyName || 'Corporate Buyer'}</div>
-                  <div>Attn: {user.name}</div>
-                  <div className="font-mono font-bold text-zinc-900 mt-1">
-                    GSTIN: {user.gstin || '29AAACN1234F1Z8'}
-                  </div>
-                </div>
-                <div>
-                  <div className="font-bold text-zinc-900">ORDER & SHIPMENT:</div>
-                  <div>Order Ref: {activeInvoicePreview.orderNumber}</div>
-                  <div>Place of Supply: Karnataka (29)</div>
-                  <div>Payment Mode: B2B Verified Gateway</div>
-                </div>
-              </div>
-
-              {/* Itemized Table */}
-              <table className="w-full text-left text-[11px]">
-                <thead>
-                  <tr className="border-b border-zinc-300 font-bold">
-                    <th className="pb-1">DESCRIPTION</th>
-                    <th className="pb-1">SAC</th>
-                    <th className="pb-1 text-center">QTY</th>
-                    <th className="pb-1 text-right">TAXABLE (₹)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100">
-                  <tr>
-                    <td className="py-2">
-                      Custom Corporate Apparel & Merchandise<br />
-                      <span className="text-[10px] text-zinc-500">Order {activeInvoicePreview.orderNumber}</span>
-                    </td>
-                    <td className="py-2 font-mono">9989</td>
-                    <td className="py-2 text-center font-mono">{activeInvoicePreview.itemsCount}</td>
-                    <td className="py-2 text-right font-mono">₹{activeInvoicePreview.taxableValue.toLocaleString('en-IN')}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              {/* Total Calculation */}
-              <div className="border-t border-zinc-200 pt-3 space-y-1 text-right font-mono text-[11px]">
-                <div>Taxable Value: ₹{activeInvoicePreview.taxableValue.toLocaleString('en-IN')}</div>
-                <div>CGST (9%): ₹{activeInvoicePreview.cgst.toLocaleString('en-IN')}</div>
-                <div>SGST (9%): ₹{activeInvoicePreview.sgst.toLocaleString('en-IN')}</div>
-                <div className="text-sm font-bold text-[#0B0B0D] pt-1 border-t border-zinc-200">
-                  Total Invoice Amount: ₹{activeInvoicePreview.totalAmount.toLocaleString('en-IN')}
-                </div>
-              </div>
-
-              {/* Authorized Signatory Stamp */}
-              <div className="pt-4 flex justify-between items-end border-t border-zinc-200 text-[10px] text-zinc-500">
-                <div>
-                  Certified that the particulars given above are true and correct.<br />
-                  Input Tax Credit (ITC) is applicable under Section 16 of the CGST Act.
-                </div>
-                <div className="text-center">
-                  <div className="w-24 h-10 border border-dashed border-zinc-300 rounded flex items-center justify-center font-mono text-[9px] text-zinc-400">
-                    [E-SIGN SEAL]
-                  </div>
-                  <div className="font-semibold text-zinc-800 mt-1">For TeqqnoWorld Pvt Ltd</div>
-                </div>
-              </div>
-            </div>
-
+    <div className="min-h-screen bg-[#F4F7FB] text-[#0B1530] flex flex-col lg:flex-row w-full max-w-full overflow-x-hidden">
+      {/* Desktop Fixed Dark Navy Sidebar */}
+      <aside className="hidden lg:block w-[272px] shrink-0 sticky top-0 h-screen shadow-xl z-30">
+        {renderSidebarBody()}
+      </aside>
+
+      {/* Mobile Slide-Out Sidebar Drawer */}
+      {mobileDrawerOpen && (
+        <div
+          className="fixed inset-0 z-50 lg:hidden bg-[#0B1530]/60 backdrop-blur-xs flex"
+          onClick={() => setMobileDrawerOpen(false)}
+        >
+          <div
+            className="w-[280px] max-w-[85vw] h-full shadow-2xl animate-admin-slide-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {renderSidebarBody()}
           </div>
         </div>
       )}
 
+      {/* Main Content Area */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Top Portal Utility Header */}
+        <header className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(true)}
+              aria-label="Open portal navigation"
+              className="lg:hidden min-w-[44px] min-h-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-[#0B1530] cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigateTab('home')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-[#0B1530] cursor-pointer min-h-[40px]"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-[#FF7900]" />
+              <span className="hidden sm:inline">Back to Storefront</span>
+              <span className="sm:hidden">Store</span>
+            </button>
+
+            <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-400 font-medium pl-2">
+              <span>Customer Portal</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+              <span className="text-[#0B1530] font-semibold capitalize">
+                {activeTab.replace('-', ' ')}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                syncLiveOrders();
+                pushToast('Synced live orders from factory database', 'info');
+              }}
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 cursor-pointer min-h-[40px]"
+              title="Refresh live order updates"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-[#FF7900]' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+
+            {onOpenCart && (
+              <button
+                type="button"
+                onClick={onOpenCart}
+                className="relative px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-[#0B1530] inline-flex items-center gap-1.5 cursor-pointer min-h-[40px]"
+                aria-label="Open shopping cart"
+              >
+                <ShoppingBag className="w-4 h-4 text-[#FF7900]" />
+                <span className="hidden sm:inline">Cart</span>
+                {cartCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#FF7900] text-white text-[10px] font-bold tabular-nums">
+                    {cartCount}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* Notifications Bell & Popover */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotifPopoverOpen((p) => !p)}
+                aria-label="Notifications"
+                className="relative min-w-[40px] min-h-[40px] px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-[#0B1530] cursor-pointer"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadNotifCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#FF7900] text-white text-[9px] font-bold flex items-center justify-center tabular-nums">
+                    {unreadNotifCount}
+                  </span>
+                )}
+              </button>
+
+              {notifPopoverOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-40 animate-admin-scale-in">
+                  <div className="px-4 py-3 bg-[#0B1530] text-white flex items-center justify-between">
+                    <span className="text-xs font-bold">
+                      Alerts & Proof Updates ({notifications.length})
+                    </span>
+                    {unreadNotifCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllNotifsRead}
+                        className="text-[11px] font-semibold text-[#FF7900] hover:underline cursor-pointer"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-slate-500">
+                        You're all caught up! Order & proof updates will appear here.
+                      </div>
+                    ) : (
+                      notifications.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => {
+                            setNotifPopoverOpen(false);
+                            if (n.orderId) {
+                              const match = mergedOrders.find((o) => o.id === n.orderId);
+                              if (match) setDetailDrawerOrder(match);
+                            }
+                          }}
+                          className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer ${
+                            n.read ? 'opacity-75' : 'bg-orange-50/40'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="text-xs font-bold text-[#0B1530]">{n.title}</span>
+                            {!n.read && (
+                              <span className="w-2 h-2 rounded-full bg-[#FF7900] shrink-0 mt-1" />
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                            {n.message}
+                          </p>
+                          <span className="text-[10px] text-slate-400 mt-1 block">
+                            {n.timestamp}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => goToTab('account-security', 'profile')}
+              className="hidden sm:inline-flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl border border-slate-200 hover:border-[#FF7900]/50 bg-white cursor-pointer"
+            >
+              <div className="w-7 h-7 rounded-full bg-[#0B1530] text-white text-xs font-bold flex items-center justify-center overflow-hidden">
+                {user.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.name}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  user.name.charAt(0).toUpperCase()
+                )}
+              </div>
+              <span className="text-xs font-bold text-[#0B1530] max-w-[110px] truncate">
+                {user.name.split(' ')[0]}
+              </span>
+            </button>
+          </div>
+        </header>
+
+        {/* Scrollable Content Workspace */}
+        <main className="flex-1 p-3.5 sm:p-5 lg:p-6 max-w-[1440px] w-full mx-auto space-y-5">
+          {/* ==============================================================
+              TAB: DASHBOARD OVERVIEW (REFERENCE LAYOUT)
+             ============================================================== */}
+          {activeTab === 'overview' && (
+            <>
+              {/* 1. Premium Navy Welcome Banner */}
+              <section className="rounded-3xl bg-gradient-to-r from-[#071B35] via-[#0B1530] to-[#1A1A2E] text-white p-5 sm:p-7 shadow-xl border border-white/10 relative overflow-hidden">
+                {/* Animated subtle orange glow */}
+                <div className="animate-portal-glow pointer-events-none absolute -right-10 -bottom-16 w-80 h-80 rounded-full bg-gradient-to-tr from-[#FF7900]/45 via-[#FF7900]/20 to-transparent blur-3xl" />
+                <div className="pointer-events-none absolute left-1/3 -top-20 w-72 h-72 rounded-full bg-blue-500/15 blur-3xl" />
+
+                <div className="relative z-10 flex flex-col xl:flex-row xl:items-center justify-between gap-6">
+                  <div className="space-y-3 max-w-xl">
+                    <div>
+                      <h1 className="text-2xl sm:text-3xl font-bold font-display leading-tight">
+                        Welcome back,{' '}
+                        <span className="text-[#FF7900]">{user.name}!</span>
+                      </h1>
+                      <p className="text-xs sm:text-sm text-slate-300 mt-1.5">
+                        Manage your orders, designs, brand assets and account, all in one place.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {user.isVerified && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-semibold">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Verified Account</span>
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/15 text-slate-200 text-xs font-medium">
+                        <User className="w-3.5 h-3.5 text-[#FF7900]" />
+                        <span>{getPortalGreetingSubtext(user)}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Product Visuals + Action Buttons */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-5">
+                    {/* Curated Local Product Visual Cluster */}
+                    <div className="hidden md:flex items-center -space-x-2.5">
+                      {[
+                        { src: '/assets/categories/cat_polos.webp', alt: 'Custom Polo Shirt' },
+                        {
+                          src: '/assets/aistudio/Blank_White_Ceramic_Mug_b82bfadb.webp',
+                          alt: 'Custom Ceramic Mug',
+                        },
+                        { src: '/assets/categories/cat_caps.webp', alt: 'Custom Branded Cap' },
+                        { src: '/assets/categories/cat_gift_sets.webp', alt: 'Corporate Gift Box' },
+                      ].map((prod) => (
+                        <div
+                          key={prod.alt}
+                          className="w-16 h-16 rounded-2xl bg-white/95 border-2 border-[#FF7900]/40 shadow-lg overflow-hidden p-1 hover:-translate-y-1 transition-transform"
+                        >
+                          <img
+                            src={prod.src}
+                            alt={prod.alt}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-contain rounded-xl"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => onNavigateTab('customizer')}
+                        className="flex-1 sm:flex-initial px-5 py-3 rounded-xl bg-[#FF7900] hover:bg-[#ff881c] text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 shadow-lg shadow-[#FF7900]/30 transition-all cursor-pointer min-h-[44px]"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>New Custom Order</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFullLogout}
+                        className="px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[44px]"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>Logout</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* 2. Four Real-Data KPI Cards */}
+              <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <CustomerKpiCard
+                  id="orders-placed"
+                  title="Total Orders Placed"
+                  value={totalOrdersCount}
+                  badgeText={totalOrdersCount > 0 ? 'Synced' : undefined}
+                  subtitle="Confirmed & queued custom orders"
+                  theme="orange"
+                  icon={<Package className="w-5 h-5" />}
+                  sparkPoints={orderSparkPoints}
+                  onClick={() => goToTab('orders')}
+                />
+                <CustomerKpiCard
+                  id="active-prod"
+                  title="Active In Production"
+                  value={activeProductionCount}
+                  subtitle="In progress & proof review orders"
+                  theme="blue"
+                  icon={<Clock className="w-5 h-5" />}
+                  sparkPoints={orderSparkPoints}
+                  onClick={() => goToTab('track')}
+                />
+                <CustomerKpiCard
+                  id="tax-invoices"
+                  title="GST / Tax Invoices"
+                  value={invoicesCount}
+                  subtitle="Official SAC 9989 GST documents"
+                  theme="green"
+                  icon={<FileText className="w-5 h-5" />}
+                  sparkPoints={valueSparkPoints}
+                  onClick={() => goToTab('gst-invoices')}
+                />
+                <CustomerKpiCard
+                  id="brand-assets"
+                  title="Brand Assets"
+                  value={brandAssetsCount}
+                  subtitle="Logos & order-ready artworks"
+                  theme="violet"
+                  icon={<Layers className="w-5 h-5" />}
+                  sparkPoints={[1, 2, Math.max(1, brandAssetsCount)]}
+                  onClick={() => goToTab('brand-assets')}
+                />
+              </section>
+
+              {/* 3. Quick Actions Functional Strip */}
+              <section className="bg-white rounded-2xl border border-slate-200/80 shadow-xs px-4 py-3.5 flex flex-wrap items-center gap-2.5">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#0B1530] mr-1">
+                  <Sparkles className="w-4 h-4 text-[#FF7900]" />
+                  <span>Quick Actions:</span>
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenQuoteCalculator
+                      ? onOpenQuoteCalculator()
+                      : onNavigateTab('quote-calculator')
+                  }
+                  className="px-3.5 py-2 rounded-xl bg-[#0B1530] hover:bg-[#132550] text-white text-xs font-bold inline-flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
+                >
+                  <Calculator className="w-3.5 h-3.5 text-[#FF7900]" />
+                  <span>B2B Quote Calculator</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenBundleBuilder
+                      ? onOpenBundleBuilder()
+                      : onNavigateTab('bundle-builder')
+                  }
+                  className="px-3.5 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 border border-orange-200 text-[#FF7900] text-xs font-bold inline-flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
+                >
+                  <Gift className="w-3.5 h-3.5" />
+                  <span>Gift Bundle Builder</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('customizer')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[#0B1530] text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
+                >
+                  <PenTool className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Customize Product</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => goToTab('brand-assets')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[#0B1530] text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
+                >
+                  <Upload className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Upload / Manage Logo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => goToTab('quotes')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[#0B1530] text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
+                >
+                  <Building2 className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Bulk RFQ</span>
+                </button>
+              </section>
+
+              {/* 4. Orders Analytics Charts (Area Chart + Donut Chart) */}
+              <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+                <div className="xl:col-span-7">
+                  <OrdersAreaChart
+                    series={analyticsSeries}
+                    days={chartDays}
+                    onChangeDays={setChartDays}
+                  />
+                </div>
+                <div className="xl:col-span-5">
+                  <OrderStatusDonut
+                    total={statusBreakdown.total}
+                    segments={statusBreakdown.segments}
+                    onSelectStatus={(segKey) => {
+                      if (segKey === 'pending') setOrderFilter('Artwork Verification');
+                      else if (segKey === 'production') setOrderFilter('Manufacturing');
+                      else if (segKey === 'dispatched') setOrderFilter('Dispatched');
+                      else if (segKey === 'delivered') setOrderFilter('Delivered');
+                      goToTab('orders');
+                    }}
+                  />
+                </div>
+              </section>
+
+              {/* 5. Recent Orders Snapshot Table & Mobile Cards */}
+              <section className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-50 border border-orange-200/70 text-[#FF7900] flex items-center justify-center shrink-0">
+                      <Package className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-[#0B1530] font-display">
+                        Recent Orders
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Live manufacturing status, proof reviews and order tracking.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => goToTab('orders')}
+                    className="text-xs font-bold text-[#FF7900] hover:underline inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>View All Orders ({totalOrdersCount})</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {mergedOrders.length === 0 ? (
+                  <div className="p-10 text-center space-y-2">
+                    <Package className="w-10 h-10 text-slate-300 mx-auto" />
+                    <div className="text-sm font-bold text-[#0B1530]">No orders placed yet</div>
+                    <p className="text-xs text-slate-500">
+                      Customize a product to place your first order and track live proofs here.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Desktop Table */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200/80">
+                            <th className="py-3 px-4">Order ID & Date</th>
+                            <th className="py-3 px-4">Product Details</th>
+                            <th className="py-3 px-4">Amount</th>
+                            <th className="py-3 px-4">Status</th>
+                            <th className="py-3 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {mergedOrders.slice(0, 4).map((order) => {
+                            const first = order.items[0];
+                            const thumb = getThumbnailForOrder(order);
+                            const badge = getOrderStatusBadgeMeta(order.orderStatus);
+                            const totalUnits = order.items.reduce(
+                              (sum, it) => sum + (it.quantity || 1),
+                              0
+                            );
+
+                            return (
+                              <tr
+                                key={order.id}
+                                className="hover:bg-slate-50/70 transition-colors"
+                              >
+                                <td className="py-3.5 px-4">
+                                  <div className="flex items-center gap-3">
+                                    <AssetPreviewThumb
+                                      src={thumb}
+                                      alt={first?.product?.name || order.orderNumber}
+                                      className="w-12 h-12 rounded-xl"
+                                    />
+                                    <div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDetailDrawerOrder(order)}
+                                        className="font-bold text-[#FF7900] hover:underline text-sm cursor-pointer"
+                                      >
+                                        {order.orderNumber}
+                                      </button>
+                                      <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 tabular-nums">
+                                        <Calendar className="w-3 h-3 text-slate-400" />
+                                        <span>
+                                          {new Date(order.createdAt).toLocaleDateString('en-IN', {
+                                            day: '2-digit',
+                                            month: 'short',
+                                            year: 'numeric',
+                                          })}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                <td className="py-3.5 px-4 max-w-xs">
+                                  <div className="font-bold text-[#0B1530] truncate">
+                                    {first?.product?.name?.split('|')[0]?.trim() ||
+                                      'Custom Merchandise'}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                    {totalUnits} pcs • {first?.color?.name || 'Custom'} •{' '}
+                                    {first?.printMethod || 'DTF Printing'}
+                                  </div>
+                                </td>
+
+                                <td className="py-3.5 px-4">
+                                  <div className="font-bold text-[#0B1530] tabular-nums">
+                                    ₹{Math.round(order.total).toLocaleString('en-IN')}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">(incl. 18% GST)</div>
+                                </td>
+
+                                <td className="py-3.5 px-4">
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold whitespace-nowrap ${badge.pillClass}`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${badge.dotClass}`} />
+                                    {badge.label}
+                                  </span>
+                                </td>
+
+                                <td className="py-3.5 px-4 text-right">
+                                  {renderOrderActions(order)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Stacked Cards */}
+                    <div className="md:hidden divide-y divide-slate-100">
+                      {mergedOrders.slice(0, 4).map((order) => {
+                        const first = order.items[0];
+                        const thumb = getThumbnailForOrder(order);
+                        const badge = getOrderStatusBadgeMeta(order.orderStatus);
+                        const totalUnits = order.items.reduce(
+                          (sum, it) => sum + (it.quantity || 1),
+                          0
+                        );
+                        return (
+                          <div key={order.id} className="p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <AssetPreviewThumb
+                                  src={thumb}
+                                  alt={first?.product?.name || order.orderNumber}
+                                  className="w-12 h-12 rounded-xl"
+                                />
+                                <div className="min-w-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDetailDrawerOrder(order)}
+                                    className="font-bold text-sm text-[#FF7900]"
+                                  >
+                                    #{order.orderNumber}
+                                  </button>
+                                  <div className="text-xs font-bold text-[#0B1530] truncate">
+                                    {first?.product?.name?.split('|')[0]?.trim()}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {totalUnits} pcs • ₹{Math.round(order.total).toLocaleString('en-IN')}
+                                  </div>
+                                </div>
+                              </div>
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 ${badge.pillClass}`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${badge.dotClass}`} />
+                                {badge.label}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => onSelectOrderProof(order)}
+                                className="flex-1 py-2 px-3 rounded-xl bg-[#0B1530] text-white text-xs font-semibold min-h-[40px]"
+                              >
+                                Proof Studio
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTrackTargetOrder(order);
+                                  goToTab('track');
+                                }}
+                                className="py-2 px-3 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold min-h-[40px]"
+                              >
+                                Track
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onReorder(order);
+                                  pushToast(`Added #${order.orderNumber} to cart`, 'success');
+                                }}
+                                className="py-2 px-3 rounded-xl bg-orange-50 text-[#FF7900] text-xs font-bold min-h-[40px]"
+                              >
+                                Reorder
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </section>
+
+              {/* 6. Bottom Split Row: Master Brand Assets + Manage Account & Preferences */}
+              <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+                {/* Master Brand Assets */}
+                <div className="xl:col-span-6 bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 flex flex-col justify-between gap-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-orange-50 border border-orange-200/70 text-[#FF7900] flex items-center justify-center shrink-0">
+                        <Layers className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-[#0B1530] font-display">
+                          Master Brand Assets
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          Your approved logos, artwork and brand resources.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => goToTab('brand-assets')}
+                      className="text-xs font-bold text-[#FF7900] hover:underline inline-flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <span>Manage Artworks</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {allBrandAssets.length === 0 ? (
+                    <div className="p-5 rounded-2xl bg-slate-50 border border-dashed border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="text-xs text-slate-600 text-center sm:text-left">
+                        <strong className="text-[#0B1530] block">No brand logos saved yet</strong>
+                        Upload your PNG, SVG, or PDF logo once and apply it to any product in 1 click.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => goToTab('brand-assets')}
+                        className="px-4 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#e86d00] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload Logo</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {allBrandAssets.slice(0, 2).map((asset) => (
+                        <div
+                          key={asset.id}
+                          className="p-3.5 rounded-2xl border border-slate-200/80 bg-slate-50/70 flex items-center justify-between gap-2.5 hover:border-[#FF7900]/40 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <AssetPreviewThumb
+                              src={asset.previewUrl}
+                              alt={asset.title}
+                              isPdf={asset.fileType === 'pdf'}
+                              className="w-12 h-12 rounded-xl bg-white"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-[#0B1530] truncate">
+                                {asset.title}
+                              </div>
+                              <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                {asset.status}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleApplyAssetToProduct(asset, PRODUCTS[0].id)}
+                            title="Apply logo to product"
+                            className="p-2 rounded-xl bg-white border border-slate-200 hover:border-[#FF7900] text-[#0B1530] cursor-pointer shrink-0"
+                          >
+                            <ArrowRight className="w-3.5 h-3.5 text-[#FF7900]" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manage Account & Preferences 8-Tile Grid */}
+                <div className="xl:col-span-6 bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-50 border border-orange-200/70 text-[#FF7900] flex items-center justify-center shrink-0">
+                      <Settings className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-[#0B1530] font-display">
+                        Manage Account & Preferences
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Quick access to profile, security, billing & addresses.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {accountTiles.map((tile) => (
+                      <button
+                        key={tile.title}
+                        type="button"
+                        onClick={tile.action}
+                        className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm cursor-pointer min-h-[92px] ${tile.cardClass}`}
+                      >
+                        <span className={tile.iconColor}>{tile.icon}</span>
+                        <span className="text-[11px] font-bold text-[#0B1530] leading-tight">
+                          {tile.title}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {/* ==============================================================
+              TAB: MY ORDERS & PROOFS (FULL SEARCH, FILTER, SORT, PAGINATION)
+             ============================================================== */}
+          {activeTab === 'orders' && (
+            <section className="space-y-4">
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-[#0B1530] font-display flex items-center gap-2">
+                      <Package className="w-5 h-5 text-[#FF7900]" />
+                      <span>My Orders & Proofs ({filteredOrders.length})</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Inspect order proofs, live production status, GST invoices & courier AWBs
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('customizer')}
+                    className="px-4 py-2.5 rounded-xl bg-[#FF7900] hover:bg-[#e86d00] text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer min-h-[44px]"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>New Custom Order</span>
+                  </button>
+                </div>
+
+                {/* Search + Status Filter + Sort */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={orderSearch}
+                      onChange={(e) => setOrderSearch(e.target.value)}
+                      placeholder="Search by Order ID, Product Name, Color or Print Method..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-[#0B1530] focus:outline-none focus:ring-2 focus:ring-[#FF7900]"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Filter orders by status"
+                      value={orderFilter}
+                      onChange={(e) => setOrderFilter(e.target.value as any)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-semibold text-[#0B1530]"
+                    >
+                      <option value="All">All Stages</option>
+                      <option value="Artwork Verification">Artwork Verification</option>
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Manufacturing">In Production</option>
+                      <option value="Dispatched">Dispatched</option>
+                      <option value="Delivered">Delivered</option>
+                    </select>
+
+                    <select
+                      aria-label="Sort orders"
+                      value={orderSort}
+                      onChange={(e) => setOrderSort(e.target.value as any)}
+                      className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-semibold text-[#0B1530]"
+                    >
+                      <option value="newest">Newest First</option>
+                      <option value="oldest">Oldest First</option>
+                      <option value="highest">Highest Amount</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+                {pagedOrders.length === 0 ? (
+                  <div className="p-10 text-center space-y-2">
+                    <Search className="w-10 h-10 text-slate-300 mx-auto" />
+                    <div className="text-sm font-bold text-[#0B1530]">
+                      No orders match your filters
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOrderSearch('');
+                        setOrderFilter('All');
+                      }}
+                      className="text-xs font-bold text-[#FF7900] hover:underline cursor-pointer"
+                    >
+                      Clear all filters
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200/80">
+                            <th className="py-3 px-4">Order ID & Date</th>
+                            <th className="py-3 px-4">Product & Specifications</th>
+                            <th className="py-3 px-4">Amount & Payment</th>
+                            <th className="py-3 px-4">Proof & Order Status</th>
+                            <th className="py-3 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {pagedOrders.map((order) => {
+                            const first = order.items[0];
+                            const thumb = getThumbnailForOrder(order);
+                            const badge = getOrderStatusBadgeMeta(order.orderStatus);
+                            const totalUnits = order.items.reduce(
+                              (sum, it) => sum + (it.quantity || 1),
+                              0
+                            );
+                            return (
+                              <tr key={order.id} className="hover:bg-slate-50/70 transition-colors">
+                                <td className="py-3.5 px-4">
+                                  <div className="flex items-center gap-3">
+                                    <AssetPreviewThumb
+                                      src={thumb}
+                                      alt={first?.product?.name || order.orderNumber}
+                                      className="w-12 h-12 rounded-xl"
+                                    />
+                                    <div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDetailDrawerOrder(order)}
+                                        className="font-bold text-[#FF7900] hover:underline text-sm cursor-pointer"
+                                      >
+                                        {order.orderNumber}
+                                      </button>
+                                      <div className="text-[11px] text-slate-500 tabular-nums">
+                                        {new Date(order.createdAt).toLocaleDateString('en-IN', {
+                                          day: '2-digit',
+                                          month: 'short',
+                                          year: 'numeric',
+                                        })}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 max-w-xs">
+                                  <div className="font-bold text-[#0B1530] truncate">
+                                    {first?.product?.name?.split('|')[0]?.trim()}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                    {totalUnits} pcs • {first?.color?.name || 'Custom'} •{' '}
+                                    {first?.printMethod}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <div className="font-bold text-[#0B1530] tabular-nums">
+                                    ₹{Math.round(order.total).toLocaleString('en-IN')}
+                                  </div>
+                                  <div className="text-[10px] font-semibold text-emerald-700">
+                                    {order.paymentStatus}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${badge.pillClass}`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${badge.dotClass}`} />
+                                    {badge.label}
+                                  </span>
+                                  <div className="text-[10px] text-slate-500 mt-1">
+                                    {order.proofStatus}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  {renderOrderActions(order)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Cards */}
+                    <div className="md:hidden divide-y divide-slate-100">
+                      {pagedOrders.map((order) => {
+                        const first = order.items[0];
+                        const thumb = getThumbnailForOrder(order);
+                        const badge = getOrderStatusBadgeMeta(order.orderStatus);
+                        const totalUnits = order.items.reduce(
+                          (sum, it) => sum + (it.quantity || 1),
+                          0
+                        );
+                        return (
+                          <div key={order.id} className="p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <AssetPreviewThumb
+                                  src={thumb}
+                                  alt={first?.product?.name || order.orderNumber}
+                                  className="w-12 h-12 rounded-xl"
+                                />
+                                <div className="min-w-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDetailDrawerOrder(order)}
+                                    className="font-bold text-sm text-[#FF7900]"
+                                  >
+                                    #{order.orderNumber}
+                                  </button>
+                                  <div className="text-xs font-bold text-[#0B1530] truncate">
+                                    {first?.product?.name?.split('|')[0]?.trim()}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {totalUnits} pcs • ₹{Math.round(order.total).toLocaleString('en-IN')} •{' '}
+                                    {order.paymentStatus}
+                                  </div>
+                                </div>
+                              </div>
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 ${badge.pillClass}`}
+                              >
+                                {badge.label}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setDetailDrawerOrder(order)}
+                                className="py-2 px-3 rounded-xl bg-slate-100 text-[#0B1530] text-xs font-semibold min-h-[40px]"
+                              >
+                                Details
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onSelectOrderProof(order)}
+                                className="flex-1 py-2 px-3 rounded-xl bg-[#0B1530] text-white text-xs font-semibold min-h-[40px]"
+                              >
+                                Proof Studio
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTrackTargetOrder(order);
+                                  goToTab('track');
+                                }}
+                                className="py-2 px-3 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold min-h-[40px]"
+                              >
+                                Track
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onReorder(order);
+                                  pushToast(`Added #${order.orderNumber} to cart`, 'success');
+                                }}
+                                className="py-2 px-3 rounded-xl bg-orange-50 text-[#FF7900] text-xs font-bold min-h-[40px]"
+                              >
+                                Reorder
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Pagination Footer */}
+                    {totalOrderPages > 1 && (
+                      <div className="px-5 py-3.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
+                        <span className="tabular-nums">
+                          Page {ordersPage} of {totalOrderPages}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={ordersPage <= 1}
+                            onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                            className="p-2 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-100 cursor-pointer"
+                            aria-label="Previous orders page"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={ordersPage >= totalOrderPages}
+                            onClick={() => setOrdersPage((p) => Math.min(totalOrderPages, p + 1))}
+                            className="p-2 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-100 cursor-pointer"
+                            aria-label="Next orders page"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* ==============================================================
+              OTHER SUB-VIEWS
+             ============================================================== */}
+          {activeTab === 'track' && (
+            <CustomerTrackConsignmentView
+              orders={mergedOrders}
+              selectedOrder={trackTargetOrder}
+              onSelectOrder={setTrackTargetOrder}
+              onToast={pushToast}
+            />
+          )}
+
+          {(activeTab === 'artworks' || activeTab === 'brand-assets') && (
+            <CustomerBrandAssetsView
+              mode={activeTab}
+              assets={allBrandAssets}
+              onAddAsset={(asset) => setUploadedAssets((prev) => [asset, ...prev])}
+              onReplaceAsset={(id, updated) =>
+                setUploadedAssets((prev) => prev.map((a) => (a.id === id ? updated : a)))
+              }
+              onDeleteAsset={(id) => {
+                setUploadedAssets((prev) => prev.filter((a) => a.id !== id));
+                pushToast('Removed brand asset', 'info');
+              }}
+              onApplyAssetToProduct={handleApplyAssetToProduct}
+              onToast={pushToast}
+            />
+          )}
+
+          {activeTab === 'addresses' && (
+            <CustomerAddressesView
+              user={user}
+              addresses={user.savedAddresses || []}
+              onSaveAddresses={(next: SavedAddress[]) =>
+                onUpdateUser({ ...user, savedAddresses: next })
+              }
+              onToast={pushToast}
+            />
+          )}
+
+          {activeTab === 'gst-invoices' && (
+            <CustomerGstInvoicesView
+              user={user}
+              orders={mergedOrders}
+              invoices={invoices}
+              onUpdateUser={onUpdateUser}
+              onToast={pushToast}
+            />
+          )}
+
+          {activeTab === 'quotes' && (
+            <CustomerBulkRfqView
+              user={user}
+              rfqs={customerRfqs}
+              onAddRfq={(rfq) => setCustomerRfqs((prev) => [rfq, ...prev])}
+              onToast={pushToast}
+            />
+          )}
+
+          {activeTab === 'wishlist' && (
+            <CustomerWishlistView
+              products={wishlistProducts}
+              onCustomizeProduct={onCustomizeProduct}
+              onRemoveWishlist={handleToggleWish}
+              onExploreCatalog={() => onNavigateTab('catalog')}
+            />
+          )}
+
+          {activeTab === 'account-security' && (
+            <CustomerAccountSecurityView
+              user={user}
+              subSection={accountSubSection}
+              onChangeSubSection={setAccountSubSection}
+              onUpdateUser={onUpdateUser}
+              onLogout={handleFullLogout}
+              onOpenAuth={onOpenAuth}
+              onToast={pushToast}
+            />
+          )}
+
+          {activeTab === 'support' && (
+            <CustomerSupportView
+              user={user}
+              orders={mergedOrders}
+              onTrackOrder={(o) => {
+                setTrackTargetOrder(o);
+                goToTab('track');
+              }}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* Order Detail Slide-Over Drawer */}
+      <OrderDetailDrawer
+        order={detailDrawerOrder}
+        onClose={() => setDetailDrawerOrder(null)}
+        onOpenProofStudio={onSelectOrderProof}
+        onTrackOrder={(o) => {
+          setTrackTargetOrder(o);
+          goToTab('track');
+        }}
+        onReorder={onReorder}
+        onToast={pushToast}
+      />
+
+      {/* Toast Notifications */}
+      <PortalToastList
+        toasts={toasts}
+        onDismiss={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))}
+      />
     </div>
   );
 };

@@ -592,6 +592,50 @@ button:active svg.lucide {
   animation: admin-sparkline-draw 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@keyframes portal-banner-glow {
+  0%, 100% {
+    opacity: 0.55;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translate3d(-12px, -6px, 0) scale(1.06);
+  }
+}
+
+@keyframes portal-donut-draw {
+  from {
+    stroke-dashoffset: 280;
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes portal-area-draw {
+  from {
+    stroke-dashoffset: 900;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-portal-glow {
+  animation: portal-banner-glow 7s ease-in-out infinite;
+}
+
+.animate-portal-donut {
+  animation: portal-donut-draw 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-portal-area {
+  stroke-dasharray: 900;
+  stroke-dashoffset: 0;
+  animation: portal-area-draw 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* Accessibility: Respect Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   svg.lucide,
@@ -619,7 +663,10 @@ button:active svg.lucide {
   .animate-admin-scale-in,
   .animate-admin-slide-right,
   .animate-admin-slide-left,
-  .animate-admin-sparkline {
+  .animate-admin-sparkline,
+  .animate-portal-glow,
+  .animate-portal-donut,
+  .animate-portal-area {
     animation: none !important;
     transition: none !important;
     transform: none !important;

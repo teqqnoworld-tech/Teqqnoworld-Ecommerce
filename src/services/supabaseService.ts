@@ -133,7 +133,12 @@ export async function uploadBrandLogoToStorage(
 
   try {
     const isSvg = (file.type && file.type.includes('svg')) || cleanName.endsWith('.svg');
-    if (!isSvg) {
+    const isPdf = (file.type && file.type.includes('pdf')) || cleanName.endsWith('.pdf');
+    if (isPdf) {
+      targetContentType = 'application/pdf';
+    } else if (isSvg) {
+      targetContentType = 'image/svg+xml';
+    } else {
       const compressionResult = await compressImageFile(file, {
         maxWidth: 1200,
         maxHeight: 1200,
@@ -676,4 +681,58 @@ export async function fetchCustomOrderById(searchQuery: string): Promise<CustomO
 
   return null;
 }
+
+/**
+ * 11. Fetch Customer Custom Orders filtered by customer email or phone
+ * Used by CustomerDashboard so orders placed on the storefront or updated by Admin sync live.
+ */
+export async function fetchCustomerCustomOrders(
+  email?: string | null,
+  phone?: string | null
+): Promise<{ data: CustomOrderRow[]; error?: string }> {
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const cleanDigits = (phone || '').replace(/[^0-9]/g, '').slice(-10);
+
+  if (!cleanEmail && cleanDigits.length < 10) {
+    return { data: [] };
+  }
+
+  if (!isSupabaseConfigured()) {
+    try {
+      const local: CustomOrderRow[] = JSON.parse(localStorage.getItem('teqqno_supabase_quotes') || '[]');
+      const filtered = local.filter((row) => {
+        const matchEmail = cleanEmail && (row.customer_email || '').trim().toLowerCase() === cleanEmail;
+        const rowDigits = (row.phone || '').replace(/[^0-9]/g, '').slice(-10);
+        const matchPhone = cleanDigits.length >= 10 && rowDigits === cleanDigits;
+        return Boolean(matchEmail || matchPhone);
+      });
+      return { data: filtered };
+    } catch {
+      return { data: [] };
+    }
+  }
+
+  try {
+    const orFilters: string[] = [];
+    if (cleanEmail) orFilters.push(`customer_email.ilike.${cleanEmail}`);
+    if (cleanDigits.length >= 10) orFilters.push(`phone.ilike.%${cleanDigits}%`);
+
+    const { data, error } = await supabase
+      .from('custom_orders')
+      .select('*')
+      .or(orFilters.join(','))
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.warn('[Supabase] fetchCustomerCustomOrders error:', error.message);
+      return { data: [], error: error.message };
+    }
+
+    return { data: (data as CustomOrderRow[]) || [] };
+  } catch (err: any) {
+    return { data: [], error: err?.message || 'Unable to sync customer orders' };
+  }
+}
+
 

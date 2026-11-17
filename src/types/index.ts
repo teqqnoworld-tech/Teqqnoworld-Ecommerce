@@ -218,6 +218,10 @@ export interface CustomerArtwork {
   status: 'Approved for Production' | 'Proof Ready' | 'Under Review' | 'Revision Required';
   previewUrl: string;
   associatedOrdersCount: number;
+  category?: 'company' | 'personal' | 'artwork';
+  mimeType?: string;
+  storagePath?: string;
+  isCloudSynced?: boolean;
 }
 
 export interface WishlistItem {
@@ -233,6 +237,7 @@ export interface NotificationItem {
   timestamp: string;
   read: boolean;
   type: 'order' | 'proof' | 'quote' | 'promo';
+  orderId?: string;
 }
 
 export interface TaxInvoice {
@@ -250,6 +255,13 @@ export interface TaxInvoice {
   pdfFileName: string;
 }
 
+export interface NotificationPreferences {
+  orderUpdates: boolean;
+  proofAlerts: boolean;
+  invoiceEmails: boolean;
+  promotionalOffers: boolean;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -259,6 +271,9 @@ export interface UserProfile {
   designation?: string;
   alternatePhone?: string;
   gstin?: string;
+  avatarUrl?: string;
+  accountType?: 'individual' | 'business';
+  notificationPreferences?: NotificationPreferences;
   role: 'Corporate Admin' | 'Procurement Lead' | 'Individual Shopper';
   isVerified: boolean;
   createdAt: string;
