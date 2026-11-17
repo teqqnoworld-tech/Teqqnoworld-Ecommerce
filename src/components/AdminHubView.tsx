@@ -48,7 +48,7 @@ import {
   fetchAbandonedCheckoutsFromSupabase,
   markCheckoutRecovered 
 } from '../services/supabaseService';
-import { sendOrderConfirmationEmail } from '../services/emailService';
+import { sendOrderConfirmationEmail, getSmtpStatus, sendTestEmail, SmtpStatusResponse } from '../services/emailService';
 import { generateAdminOrderInvoicePdf } from '../utils/pdfGenerator';
 import { getDirectClientWhatsAppUrl } from '../utils/whatsapp';
 import { PRODUCTS } from '../data/mockData';
@@ -100,6 +100,10 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
   const [sendingEmailOrderId, setSendingEmailOrderId] = useState<string | null>(null);
+  const [smtpStatus, setSmtpStatus] = useState<SmtpStatusResponse | null>(null);
+  const [testEmailInput, setTestEmailInput] = useState<string>('teqqnoworld@gmail.com');
+  const [testingSmtp, setTestingSmtp] = useState<boolean>(false);
+  const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Data Fetching
   const loadData = async () => {
@@ -107,18 +111,31 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setLoadingLeads(true);
 
     try {
-      const [ordersRes, leadsRes] = await Promise.all([
+      const [ordersRes, leadsRes, smtpRes] = await Promise.all([
         fetchCustomOrdersFromSupabase(),
         fetchAbandonedCheckoutsFromSupabase(),
+        getSmtpStatus(),
       ]);
 
       setOrders(ordersRes.data || []);
       setAbandonedLeads(leadsRes.data || []);
+      setSmtpStatus(smtpRes);
     } catch (err) {
       console.error('[AdminHub Load Error]:', err);
     } finally {
       setLoadingOrders(false);
       setLoadingLeads(false);
+    }
+  };
+
+  const handleTestSmtpEmail = async () => {
+    setTestingSmtp(true);
+    setSmtpTestResult(null);
+    try {
+      const res = await sendTestEmail(testEmailInput.trim() || undefined);
+      setSmtpTestResult({ success: res.success, message: res.message });
+    } finally {
+      setTestingSmtp(false);
     }
   };
 
@@ -469,9 +486,26 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                   B2B ADMIN
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span>Supabase Live Sync ({orders.length} orders · {abandonedLeads.length} leads)</span>
+                {smtpStatus && (
+                  <button
+                    onClick={() => setActiveTab('schema')}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono border cursor-pointer transition-colors ${
+                      smtpStatus.configured
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+                    }`}
+                    title="View Email / SMTP Settings"
+                  >
+                    {smtpStatus.configured
+                      ? 'SMTP: Active'
+                      : smtpStatus.backendReachable
+                        ? 'SMTP: Simulation (Set .env)'
+                        : 'SMTP: Node Server Offline'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1348,6 +1382,83 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
         {/* ===================================================================== */}
         {activeTab === 'schema' && (
           <div className="space-y-6">
+            {/* Email & Hostinger SMTP Diagnostics Panel */}
+            <div className="bg-[#16171B] border border-zinc-800 rounded-3xl p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-display font-bold text-lg text-white flex items-center gap-2">
+                    <Mail className="w-5 h-5 text-[#FF7A00]" />
+                    <span>Order Email Notifications (Hostinger SMTP)</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Sends automated confirmation to the customer AND instant New Order Alert to admin (<strong className="text-zinc-200">{smtpStatus?.adminEmail || 'teqqnoworld@gmail.com'}</strong>).
+                  </p>
+                </div>
+
+                <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold border ${
+                  smtpStatus?.configured
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                }`}>
+                  {smtpStatus?.configured
+                    ? 'LIVE SMTP CONNECTED'
+                    : smtpStatus?.backendReachable
+                      ? 'SIMULATION MODE (CREDENTIALS MISSING)'
+                      : 'STATIC HOSTING (NODE SERVER NOT RUNNING)'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div className="bg-black/40 border border-zinc-800 rounded-2xl p-3.5">
+                  <div className="text-[10px] font-mono uppercase text-zinc-500">SMTP Host & Port</div>
+                  <div className="font-mono text-zinc-200 mt-1">
+                    {smtpStatus ? `${smtpStatus.host}:${smtpStatus.port} (${smtpStatus.secure ? 'SSL' : 'TLS'})` : 'smtp.hostinger.com:465'}
+                  </div>
+                </div>
+                <div className="bg-black/40 border border-zinc-800 rounded-2xl p-3.5">
+                  <div className="text-[10px] font-mono uppercase text-zinc-500">Sender Email (HOSTINGER_SMTP_EMAIL)</div>
+                  <div className="font-mono text-zinc-200 mt-1 truncate">
+                    {smtpStatus?.senderEmail || '(not set)'}
+                  </div>
+                </div>
+                <div className="bg-black/40 border border-zinc-800 rounded-2xl p-3.5">
+                  <div className="text-[10px] font-mono uppercase text-zinc-500">Admin Alert Email (ADMIN_NOTIFICATION_EMAIL)</div>
+                  <div className="font-mono text-emerald-400 mt-1 truncate">
+                    {smtpStatus?.adminEmail || 'teqqnoworld@gmail.com'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+                <input
+                  type="email"
+                  value={testEmailInput}
+                  onChange={(e) => setTestEmailInput(e.target.value)}
+                  placeholder="Enter email for test delivery..."
+                  className="flex-1 bg-black/60 border border-zinc-700 rounded-xl py-2.5 px-3.5 text-xs text-white focus:border-[#FF7A00] outline-none"
+                />
+                <button
+                  onClick={handleTestSmtpEmail}
+                  disabled={testingSmtp}
+                  className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{testingSmtp ? 'Testing SMTP...' : 'Send Test Email'}</span>
+                </button>
+              </div>
+
+              {smtpTestResult && (
+                <div className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+                  smtpTestResult.success
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                    : 'bg-red-500/10 border-red-500/30 text-red-300'
+                }`}>
+                  {smtpTestResult.success ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
+                  <span>{smtpTestResult.message}</span>
+                </div>
+              )}
+            </div>
+
             <div className="bg-[#16171B] border border-zinc-800 rounded-3xl p-6 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>

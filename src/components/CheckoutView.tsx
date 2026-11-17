@@ -277,18 +277,23 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         sessionStorage.removeItem('teqqno_checkout_session_id');
       } catch {}
 
-      // Asynchronously trigger automated Hostinger SMTP order confirmation email
-      sendOrderConfirmationEmail({
+      // Trigger automated Hostinger SMTP order confirmation (Customer) & New Order Alert (Admin)
+      setUploadStepStatus('Sending order confirmation & admin notification emails...');
+      const emailResult = await sendOrderConfirmationEmail({
         orderId: primaryId,
         orderNumber,
         customerName: fullName.trim(),
         customerEmail: email.trim(),
         company: companyName?.trim() || undefined,
         phone: phone.trim(),
+        gstin: isB2BInvoice && gstin ? gstin.trim() : undefined,
+        paymentMode,
         items: items.map(item => ({
           name: item.product.name,
           color: item.color?.name,
           size: item.size,
+          printMethod: item.printMethod,
+          printPlacement: item.printPlacement,
           quantity: item.quantity,
           price: item.unitPrice,
           totalPrice: item.totalPrice,
@@ -304,9 +309,18 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           state,
           pincode,
         },
-      }).catch(err => {
-        console.warn('[Hostinger SMTP Trigger Warning]:', err);
       });
+
+      newOrder.emailNotification = {
+        status: emailResult.simulated
+          ? 'simulated'
+          : emailResult.success
+            ? 'sent'
+            : 'failed',
+        message: emailResult.message,
+        customerSent: emailResult.customerSent,
+        adminSent: emailResult.adminSent,
+      };
 
       setIsProcessing(false);
       onOrderPlaced(newOrder);

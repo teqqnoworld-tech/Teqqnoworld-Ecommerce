@@ -19,37 +19,77 @@ app.use(express.json({ limit: '10mb' }));
 // 1. HOSTINGER SMTP TRANSPORTER CONFIGURATION
 // ==============================================================================
 
-const getSmtpTransporter = () => {
-  const smtpUser = process.env.HOSTINGER_SMTP_EMAIL || process.env.SMTP_USER || '';
-  const smtpPass = process.env.HOSTINGER_SMTP_PASSWORD || process.env.SMTP_PASS || '';
+const getSmtpConfig = () => {
+  const smtpUser = (process.env.HOSTINGER_SMTP_EMAIL || process.env.SMTP_USER || '').trim();
+  const smtpPass = (process.env.HOSTINGER_SMTP_PASSWORD || process.env.SMTP_PASS || '').trim();
+  const smtpHost = (process.env.SMTP_HOST || 'smtp.hostinger.com').trim();
+  const smtpPort = Number(process.env.SMTP_PORT) || 465;
+  const smtpSecure = process.env.SMTP_SECURE
+    ? process.env.SMTP_SECURE === 'true'
+    : smtpPort === 465;
 
-  if (!smtpUser || !smtpPass) {
+  const rawAdminEmails = (process.env.ADMIN_NOTIFICATION_EMAIL || 'teqqnoworld@gmail.com').trim();
+  const adminEmailList = rawAdminEmails
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+
+  if (smtpUser && !adminEmailList.some((e) => e.toLowerCase() === smtpUser.toLowerCase())) {
+    adminEmailList.push(smtpUser);
+  }
+
+  return {
+    smtpUser,
+    smtpPass,
+    smtpHost,
+    smtpPort,
+    smtpSecure,
+    adminEmailList,
+    primaryAdminEmail: adminEmailList[0] || 'teqqnoworld@gmail.com',
+  };
+};
+
+const getSmtpTransporter = () => {
+  const cfg = getSmtpConfig();
+
+  if (!cfg.smtpUser || !cfg.smtpPass) {
     return null;
   }
 
   return nodemailer.createTransport({
-    host: 'smtp.hostinger.com',
-    port: 465,
-    secure: true, // SSL/TLS on port 465
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: cfg.smtpSecure,
     auth: {
-      user: smtpUser,
-      pass: smtpPass,
+      user: cfg.smtpUser,
+      pass: cfg.smtpPass,
     },
     tls: {
-      // Reject unauthorized in production, allow connection
       rejectUnauthorized: true,
     },
   });
 };
 
+function escapeHtml(value: string | undefined | null): string {
+  if (!value) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ==============================================================================
-// 2. LUXURY DARK/ORANGE B2B HTML EMAIL TEMPLATE
+// 2. LUXURY DARK/ORANGE B2B HTML EMAIL TEMPLATES (CUSTOMER + ADMIN ALERT)
 // ==============================================================================
 
 interface OrderItemPayload {
   name: string;
   color?: string;
   size?: string;
+  printMethod?: string;
+  printPlacement?: string;
   quantity: number;
   price: number;
   totalPrice?: number;
@@ -62,6 +102,8 @@ interface OrderConfirmationPayload {
   customerEmail: string;
   company?: string;
   phone?: string;
+  gstin?: string;
+  paymentMode?: string;
   items: OrderItemPayload[];
   subtotal: number;
   gstAmount: number;
@@ -74,6 +116,103 @@ interface OrderConfirmationPayload {
     state?: string;
     pincode?: string;
   };
+}
+
+function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
+  const displayOrderNum = escapeHtml(data.orderNumber || data.orderId);
+  const cleanPhoneDigits = (data.phone || '').replace(/[^0-9]/g, '');
+  const waDigits = cleanPhoneDigits.length === 10 ? `91${cleanPhoneDigits}` : cleanPhoneDigits;
+
+  const itemsHtml = data.items
+    .map((item) => {
+      const lineTotal = item.totalPrice || item.price * item.quantity;
+      const specs = [
+        item.color ? `Color: ${escapeHtml(item.color)}` : null,
+        item.size ? `Size: ${escapeHtml(item.size)}` : null,
+        item.printMethod ? `Method: ${escapeHtml(item.printMethod)}` : null,
+        item.printPlacement ? `Placement: ${escapeHtml(item.printPlacement)}` : null,
+      ]
+        .filter(Boolean)
+        .join(' • ');
+
+      return `
+        <tr>
+          <td style="padding: 12px; border-bottom: 1px solid #282A33;">
+            <div style="font-size: 13px; font-weight: 700; color: #FFFFFF;">${escapeHtml(item.name)}</div>
+            ${specs ? `<div style="font-size: 11px; color: #9CA3AF; margin-top: 3px;">${specs}</div>` : ''}
+          </td>
+          <td style="padding: 12px; border-bottom: 1px solid #282A33; text-align: center; font-size: 13px; font-weight: 700; color: #E5E7EB; font-family: monospace;">
+            ${item.quantity}
+          </td>
+          <td style="padding: 12px; border-bottom: 1px solid #282A33; text-align: right; font-size: 13px; font-weight: 700; color: #FF7A00; font-family: monospace;">
+            ₹${lineTotal.toLocaleString('en-IN')}.00
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const formattedAddress = data.shippingAddress
+    ? `${escapeHtml(data.shippingAddress.street || '')}, ${escapeHtml(data.shippingAddress.city || '')}, ${escapeHtml(data.shippingAddress.state || '')} - ${escapeHtml(data.shippingAddress.pincode || '')}`
+    : 'Not provided';
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>New Order Alert #${displayOrderNum}</title></head>
+<body style="margin:0; padding:0; background-color:#0B0B0D; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif; color:#FFFFFF;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#0B0B0D; padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:620px; background-color:#16171B; border:1px solid #FF7A00; border-radius:16px; overflow:hidden;">
+          <tr>
+            <td style="background:#1F2026; padding:22px 24px; border-bottom:2px solid #FF7A00;">
+              <div style="font-size:11px; font-weight:800; letter-spacing:2px; color:#FF7A00; text-transform:uppercase;">TEQQNOWORLD ADMIN ALERT</div>
+              <div style="font-size:22px; font-weight:800; color:#FFFFFF; margin-top:6px;">New Website Order Received: #${displayOrderNum}</div>
+              <div style="font-size:13px; color:#D1D5DB; margin-top:4px;">Grand Total: <strong style="color:#1EBE5D;">₹${data.total.toLocaleString('en-IN')}.00</strong> • Payment: ${escapeHtml(data.paymentMode || 'Standard Checkout')}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 24px;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background:#111216; border:1px solid #282A33; border-radius:12px; padding:14px;">
+                <tr>
+                  <td style="font-size:12px; color:#9CA3AF; line-height:1.7;">
+                    <strong style="color:#FFFFFF;">Customer:</strong> ${escapeHtml(data.customerName)}${data.company ? ` (${escapeHtml(data.company)})` : ''}<br/>
+                    <strong style="color:#FFFFFF;">Email:</strong> <a href="mailto:${escapeHtml(data.customerEmail)}" style="color:#FF7A00;">${escapeHtml(data.customerEmail)}</a><br/>
+                    <strong style="color:#FFFFFF;">Phone:</strong> <a href="tel:${escapeHtml(data.phone || '')}" style="color:#FF7A00;">${escapeHtml(data.phone || 'Not provided')}</a><br/>
+                    ${data.gstin ? `<strong style="color:#FFFFFF;">GSTIN:</strong> ${escapeHtml(data.gstin)}<br/>` : ''}
+                    <strong style="color:#FFFFFF;">Delivery Address:</strong> ${formattedAddress}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 16px 24px;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <thead>
+                  <tr style="border-bottom:1px solid #2F313B;">
+                    <th style="padding:8px 12px; text-align:left; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Item</th>
+                    <th style="padding:8px 12px; text-align:center; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Qty</th>
+                    <th style="padding:8px 12px; text-align:right; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Total</th>
+                  </tr>
+                </thead>
+                <tbody>${itemsHtml}</tbody>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 24px 24px 24px; text-align:center;">
+              ${waDigits ? `<a href="https://wa.me/${waDigits}?text=${encodeURIComponent(`Hi ${data.customerName}, we received your TeqqnoWorld order #${data.orderNumber || data.orderId}!`)}" style="display:inline-block; background:#1EBE5D; color:#FFFFFF; font-size:13px; font-weight:700; text-decoration:none; padding:10px 20px; border-radius:10px; margin-right:8px;">WhatsApp Customer</a>` : ''}
+              <a href="https://teqqnoworld.com/#admin" style="display:inline-block; background:#FF7A00; color:#FFFFFF; font-size:13px; font-weight:700; text-decoration:none; padding:10px 20px; border-radius:10px;">Open Admin Hub</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }
 
 function generateOrderEmailHtml(data: OrderConfirmationPayload): string {
@@ -287,7 +426,7 @@ function generateOrderEmailHtml(data: OrderConfirmationPayload): string {
 }
 
 // ==============================================================================
-// 3. API ROUTE: /api/send-order-email
+// 3. API ROUTES: /api/send-order-email, /api/test-email, /api/smtp-status
 // ==============================================================================
 
 app.post('/api/send-order-email', async (req: Request, res: Response) => {
@@ -301,44 +440,87 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
       });
     }
 
+    const cfg = getSmtpConfig();
     const transporter = getSmtpTransporter();
-    const senderEmail = process.env.HOSTINGER_SMTP_EMAIL || 'orders@teqqnoworld.com';
+    const senderEmail = cfg.smtpUser || 'orders@teqqnoworld.com';
     const recipientEmail = payload.customerEmail.trim();
+    const displayOrderNum = payload.orderNumber || payload.orderId;
 
-    const htmlContent = generateOrderEmailHtml(payload);
-    const subject = `Order Confirmed: #${payload.orderNumber || payload.orderId} - TeqqnoWorld`;
+    const customerHtml = generateOrderEmailHtml(payload);
+    const customerSubject = `Order Confirmed: #${displayOrderNum} - TeqqnoWorld`;
 
-    // If Hostinger credentials are not yet set in environment, simulate delivery smoothly
+    const adminHtml = generateAdminOrderAlertHtml(payload);
+    const adminSubject = `New Order #${displayOrderNum} (₹${Number(payload.total || 0).toLocaleString('en-IN')}) - ${payload.customerName}`;
+
+    // If Hostinger credentials are not yet set in environment, return simulated status clearly
     if (!transporter) {
       console.log(`[Hostinger SMTP Simulation] Transporter not configured in environment.`);
-      console.log(`[Hostinger SMTP Simulation] Would dispatch email to: ${recipientEmail}`);
-      console.log(`[Hostinger SMTP Simulation] Subject: ${subject}`);
-      
+      console.log(`[Hostinger SMTP Simulation] Customer recipient: ${recipientEmail}`);
+      console.log(`[Hostinger SMTP Simulation] Admin recipients: ${cfg.adminEmailList.join(', ')}`);
+
       return res.status(200).json({
         success: true,
         simulated: true,
-        message: 'Order confirmation email queued successfully (Hostinger SMTP simulation mode - add HOSTINGER_SMTP_EMAIL and HOSTINGER_SMTP_PASSWORD to .env to send real emails).',
+        customerSent: false,
+        adminSent: false,
+        message: 'Order confirmation email is in simulation mode (set HOSTINGER_SMTP_EMAIL, HOSTINGER_SMTP_PASSWORD, and ADMIN_NOTIFICATION_EMAIL in environment variables to send real emails).',
         recipient: recipientEmail,
+        adminRecipients: cfg.adminEmailList,
       });
     }
 
-    // Send real email via Hostinger SMTP
-    const mailOptions = {
-      from: `"TeqqnoWorld Orders" <${senderEmail}>`,
-      to: recipientEmail,
-      subject,
-      html: htmlContent,
-      // BCC to factory team for instant production notification
-      bcc: senderEmail,
-    };
+    // Send Customer Confirmation & Admin New Order Alert independently
+    const [customerResult, adminResult] = await Promise.allSettled([
+      transporter.sendMail({
+        from: `"TeqqnoWorld Orders" <${senderEmail}>`,
+        to: recipientEmail,
+        replyTo: cfg.primaryAdminEmail,
+        subject: customerSubject,
+        html: customerHtml,
+      }),
+      transporter.sendMail({
+        from: `"TeqqnoWorld Store Alerts" <${senderEmail}>`,
+        to: cfg.adminEmailList.join(', '),
+        replyTo: recipientEmail,
+        subject: adminSubject,
+        html: adminHtml,
+      }),
+    ]);
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('[Hostinger SMTP Success] Message sent:', info.messageId);
+    const customerSent = customerResult.status === 'fulfilled';
+    const adminSent = adminResult.status === 'fulfilled';
+
+    if (!customerSent) {
+      console.error('[Hostinger SMTP Customer Email Error]:', customerResult.reason);
+    }
+    if (!adminSent) {
+      console.error('[Hostinger SMTP Admin Alert Error]:', adminResult.reason);
+    }
+
+    if (!customerSent && !adminSent) {
+      const errReason: any = customerResult.status === 'rejected' ? customerResult.reason : (adminResult as PromiseRejectedResult).reason;
+      return res.status(500).json({
+        success: false,
+        customerSent: false,
+        adminSent: false,
+        message: errReason?.message || 'Failed to send both customer and admin emails via Hostinger SMTP.',
+      });
+    }
+
+    const customerMsgId = customerSent ? customerResult.value.messageId : undefined;
+    const adminMsgId = adminSent ? adminResult.value.messageId : undefined;
+
+    console.log('[Hostinger SMTP Success]', { customerSent, adminSent, customerMsgId, adminMsgId });
 
     return res.status(200).json({
       success: true,
-      messageId: info.messageId,
-      message: `Order confirmation email dispatched to ${recipientEmail} via Hostinger SMTP.`,
+      customerSent,
+      adminSent,
+      messageId: customerMsgId,
+      adminMessageId: adminMsgId,
+      recipient: recipientEmail,
+      adminRecipients: cfg.adminEmailList,
+      message: `Dispatched via Hostinger SMTP (Customer: ${customerSent ? 'Sent' : 'Failed'}, Admin Alert: ${adminSent ? 'Sent' : 'Failed'}).`,
     });
   } catch (err: any) {
     console.error('[Hostinger SMTP Error]:', err);
@@ -349,17 +531,60 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
   }
 });
 
+// Test SMTP endpoint for Admin Hub diagnostics
+app.post('/api/test-email', async (req: Request, res: Response) => {
+  try {
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+
+    if (!transporter) {
+      return res.status(400).json({
+        success: false,
+        simulated: true,
+        message: 'HOSTINGER_SMTP_EMAIL or HOSTINGER_SMTP_PASSWORD is not configured in server environment variables.',
+      });
+    }
+
+    await transporter.verify();
+
+    const targetEmail = (req.body?.toEmail || cfg.primaryAdminEmail).trim();
+    const info = await transporter.sendMail({
+      from: `"TeqqnoWorld Orders" <${cfg.smtpUser}>`,
+      to: Array.from(new Set([targetEmail, ...cfg.adminEmailList])).join(', '),
+      subject: `TeqqnoWorld SMTP Test Successful (${new Date().toLocaleString('en-IN')})`,
+      html: `<div style="font-family:sans-serif;padding:20px;background:#16171B;color:#fff;border-radius:12px;border:1px solid #FF7A00;">
+        <h2 style="color:#FF7A00;margin-top:0;">TeqqnoWorld Email Notifications Working!</h2>
+        <p>Your Hostinger SMTP configuration (<strong>${escapeHtml(cfg.smtpHost)}:${cfg.smtpPort}</strong>) verified and delivered this test email.</p>
+        <p style="font-size:12px;color:#9CA3AF;">Sender: ${escapeHtml(cfg.smtpUser)}<br/>Admin Alert Recipients: ${escapeHtml(cfg.adminEmailList.join(', '))}</p>
+      </div>`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      messageId: info.messageId,
+      adminRecipients: cfg.adminEmailList,
+      message: `Test email delivered successfully to ${targetEmail}!`,
+    });
+  } catch (err: any) {
+    console.error('[Hostinger SMTP Test Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'SMTP verification/send failed. Check email, password, host, and port.',
+    });
+  }
+});
+
 // Health check / SMTP status endpoint
 app.get('/api/smtp-status', (_req: Request, res: Response) => {
-  const hasUser = Boolean(process.env.HOSTINGER_SMTP_EMAIL || process.env.SMTP_USER);
-  const hasPass = Boolean(process.env.HOSTINGER_SMTP_PASSWORD || process.env.SMTP_PASS);
+  const cfg = getSmtpConfig();
 
   res.json({
-    configured: hasUser && hasPass,
-    host: 'smtp.hostinger.com',
-    port: 465,
-    secure: true,
-    senderEmail: process.env.HOSTINGER_SMTP_EMAIL || '(not set)',
+    configured: Boolean(cfg.smtpUser && cfg.smtpPass),
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: cfg.smtpSecure,
+    senderEmail: cfg.smtpUser || '(not set)',
+    adminEmail: cfg.adminEmailList.join(', '),
   });
 });
 

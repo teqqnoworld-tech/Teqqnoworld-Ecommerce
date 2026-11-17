@@ -283,5 +283,11 @@ export interface Order {
   courierPartner?: string;
   paymentMode: 'Test Gateway (Pre-Integration)' | 'Pay on Approval' | 'Corporate PO 30-Day';
   paymentStatus: 'Test Authenticated (Sandbox)' | 'Pending Verification';
+  emailNotification?: {
+    status: 'sent' | 'simulated' | 'failed';
+    message?: string;
+    customerSent?: boolean;
+    adminSent?: boolean;
+  };
 }
 

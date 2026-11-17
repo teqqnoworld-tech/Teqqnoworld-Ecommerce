@@ -82,9 +82,18 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
               <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B0B0D] tracking-tight mt-1">
                 Order Confirmed & Proof Generated
               </h1>
-              <p className="text-xs sm:text-sm text-zinc-600 mt-1">
-                Receipt and digital proof dispatched to <strong className="text-zinc-900">{order.shippingAddress.email}</strong>
-              </p>
+              {order.emailNotification?.status === 'simulated' || order.emailNotification?.status === 'failed' ? (
+                <p className="text-xs sm:text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-1.5 inline-flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>
+                    Order saved for <strong className="text-zinc-900">{order.shippingAddress.email}</strong> — email notification pending SMTP server setup.
+                  </span>
+                </p>
+              ) : (
+                <p className="text-xs sm:text-sm text-zinc-600 mt-1">
+                  Receipt and digital proof dispatched to <strong className="text-zinc-900">{order.shippingAddress.email}</strong>
+                </p>
+              )}
             </div>
           </div>
 
