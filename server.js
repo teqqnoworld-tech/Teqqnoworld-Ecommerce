@@ -1,3 +1,6 @@
 process.env.NODE_ENV = 'production';
 
-await import('./server.ts');
+import('./server.ts').catch((err) => {
+  console.error('[TeqqnoWorld] Failed to start server:', err);
+  process.exit(1);
+});
