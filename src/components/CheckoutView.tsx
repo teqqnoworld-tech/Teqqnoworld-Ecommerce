@@ -218,8 +218,14 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       let razorpayOrderId: string | undefined;
       let razorpayPaymentId: string | undefined;
 
-      // 0. If Razorpay live keys are configured on backend, collect 100% Prepaid or 50% Advance first
-      if (razorpayStatus?.configured) {
+      // 0. If Razorpay status hasn't finished loading yet, fetch it synchronously first
+      const liveRzpStatus = razorpayStatus ?? (await getRazorpayStatus().catch(() => null));
+      if (liveRzpStatus && !razorpayStatus) {
+        setRazorpayStatus(liveRzpStatus);
+      }
+
+      // If Razorpay live keys are configured on backend, collect 100% Prepaid or 50% Advance first
+      if (liveRzpStatus?.configured) {
         setUploadStepStatus('Opening Razorpay secure checkout...');
         const scriptOk = await loadRazorpayCheckoutScript();
         if (!scriptOk || !(window as any).Razorpay) {
@@ -241,6 +247,11 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           throw new Error(rzpOrder.message || 'Unable to create Razorpay payment session.');
         }
 
+        const brandLogoUrl =
+          typeof window !== 'undefined' && window.location.protocol === 'https:'
+            ? `${window.location.origin}/assets/aistudio/Glossy_TeqqnoWorld_Branding_Badge-photoaidcom-cropped_1055f8dc.png`
+            : undefined;
+
         const rzpResponse = await new Promise<{
           razorpay_order_id: string;
           razorpay_payment_id: string;
@@ -251,6 +262,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             amount: rzpOrder.amount,
             currency: rzpOrder.currency || 'INR',
             name: 'TeqqnoWorld',
+            ...(brandLogoUrl ? { image: brandLogoUrl } : {}),
             description:
               paymentMode === 'Partial Payment (50% Advance)'
                 ? `50% Advance (₹${payableNow.toLocaleString('en-IN')} of ₹${total.toLocaleString('en-IN')})`

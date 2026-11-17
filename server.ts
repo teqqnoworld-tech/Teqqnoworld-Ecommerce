@@ -846,10 +846,54 @@ const getRazorpayConfig = () => ({
 
 app.get('/api/razorpay/status', (_req: Request, res: Response) => {
   const rzp = getRazorpayConfig();
+  const mode = rzp.keyId.startsWith('rzp_live_')
+    ? 'live'
+    : rzp.keyId.startsWith('rzp_test_')
+    ? 'test'
+    : null;
   res.json({
     configured: Boolean(rzp.keyId && rzp.keySecret),
     keyId: rzp.keyId || null,
+    mode,
   });
+});
+
+app.get('/api/razorpay/test', async (_req: Request, res: Response) => {
+  try {
+    const rzp = getRazorpayConfig();
+    if (!rzp.keyId || !rzp.keySecret) {
+      return res.status(400).json({
+        success: false,
+        mode: null,
+        message: 'RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET is missing in environment variables.',
+      });
+    }
+    const mode = rzp.keyId.startsWith('rzp_live_') ? 'live' : 'test';
+    const authHeader = 'Basic ' + Buffer.from(`${rzp.keyId}:${rzp.keySecret}`).toString('base64');
+    const rzpResp = await fetch('https://api.razorpay.com/v1/orders?count=1', {
+      method: 'GET',
+      headers: { Authorization: authHeader },
+    });
+    const rzpData: any = await rzpResp.json().catch(() => ({}));
+    if (!rzpResp.ok) {
+      return res.status(rzpResp.status || 401).json({
+        success: false,
+        mode,
+        message: rzpData?.error?.description || 'Razorpay authentication failed. Recheck Key ID and Secret.',
+      });
+    }
+    return res.json({
+      success: true,
+      mode,
+      message: `Razorpay ${mode.toUpperCase()} API authenticated cleanly (${rzp.keyId}).`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      mode: null,
+      message: err?.message || 'Unable to reach Razorpay API.',
+    });
+  }
 });
 
 app.post('/api/razorpay/create-order', async (req: Request, res: Response) => {
@@ -945,10 +989,11 @@ app.post('/api/razorpay/verify-payment', (req: Request, res: Response) => {
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    const isValid = crypto.timingSafeEqual(
-      Buffer.from(expectedSignature, 'utf8'),
-      Buffer.from(String(razorpay_signature), 'utf8')
-    );
+    const sigBufExpected = Buffer.from(expectedSignature, 'utf8');
+    const sigBufReceived = Buffer.from(String(razorpay_signature), 'utf8');
+    const isValid =
+      sigBufExpected.length === sigBufReceived.length &&
+      crypto.timingSafeEqual(sigBufExpected, sigBufReceived);
 
     if (!isValid) {
       return res.status(400).json({

@@ -60,6 +60,7 @@ import {
 } from '../services/emailService';
 import {
   getRazorpayStatus,
+  testRazorpayConnection,
   getDelhiveryStatus,
   checkDelhiveryPincode,
   createDelhiveryShipment,
@@ -305,6 +306,8 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [testEmailInput, setTestEmailInput] = useState<string>('teqqnoworld@gmail.com');
   const [testingSmtp, setTestingSmtp] = useState<boolean>(false);
   const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testingRazorpay, setTestingRazorpay] = useState<boolean>(false);
+  const [razorpayTestResult, setRazorpayTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Delhivery Dispatch Hub Pickup & Pincode Tools
   const [testPinInput, setTestPinInput] = useState<string>('502032');
@@ -2546,21 +2549,54 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                           : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                       }`}
                     >
-                      {razorpayStatus?.configured ? 'LIVE CONNECTED' : 'AWAITING KEYS'}
+                      {razorpayStatus?.configured
+                        ? razorpayStatus.mode === 'test'
+                          ? 'TEST MODE CONNECTED'
+                          : 'LIVE CONNECTED'
+                        : 'AWAITING KEYS'}
                     </span>
                   </div>
                   <p className="text-xs text-zinc-400 leading-relaxed">
                     Checkout enforces <strong className="text-white">100% Full Prepaid</strong> and{' '}
-                    <strong className="text-white">50% Partial Advance</strong> (No COD). Set{' '}
-                    <code className="text-zinc-200">RAZORPAY_KEY_ID</code> and{' '}
-                    <code className="text-zinc-200">RAZORPAY_KEY_SECRET</code> in Hostinger Environment Variables once live KYC approves.
+                    <strong className="text-white">50% Partial Advance</strong> (Zero COD). Keys are loaded securely on the Express server via{' '}
+                    <code className="text-zinc-200">RAZORPAY_KEY_ID</code> &amp;{' '}
+                    <code className="text-zinc-200">RAZORPAY_KEY_SECRET</code>.
                   </p>
-                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5 text-xs">
-                    <div className="text-[11px] text-zinc-400">Active Key ID</div>
-                    <div className="font-mono text-zinc-200 mt-1">
-                      {razorpayStatus?.keyId || '(not set — sandbox fallback active)'}
+                  <div className="bg-[#0A0B0E] border border-white/[0.07] rounded-xl p-3.5 text-xs flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] text-zinc-400">Active Key ID</div>
+                      <div className="font-mono text-zinc-200 mt-0.5">
+                        {razorpayStatus?.keyId || '(not set — sandbox fallback active)'}
+                      </div>
                     </div>
+                    <button
+                      onClick={async () => {
+                        setTestingRazorpay(true);
+                        setRazorpayTestResult(null);
+                        try {
+                          const res = await testRazorpayConnection();
+                          setRazorpayTestResult({ success: res.success, message: res.message });
+                        } finally {
+                          setTestingRazorpay(false);
+                        }
+                      }}
+                      disabled={testingRazorpay}
+                      className="px-3.5 py-2 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-semibold text-white border border-white/[0.08] transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {testingRazorpay ? 'Verifying...' : 'Verify Live API'}
+                    </button>
                   </div>
+                  {razorpayTestResult && (
+                    <div
+                      className={`p-3 rounded-xl text-xs font-medium border ${
+                        razorpayTestResult.success
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                          : 'bg-red-500/10 text-red-300 border-red-500/30'
+                      }`}
+                    >
+                      {razorpayTestResult.message}
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-[#121318] border border-white/[0.08] rounded-2xl p-6 space-y-4">

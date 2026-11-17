@@ -4,6 +4,7 @@
 export interface RazorpayStatus {
   configured: boolean;
   keyId: string | null;
+  mode?: 'live' | 'test' | null;
   backendReachable: boolean;
 }
 
@@ -157,10 +158,28 @@ export async function getRazorpayStatus(): Promise<RazorpayStatus> {
     return {
       configured: Boolean(data.configured),
       keyId: data.keyId || null,
+      mode: data.mode || null,
       backendReachable: true,
     };
   } catch {
-    return { configured: false, keyId: null, backendReachable: false };
+    return { configured: false, keyId: null, mode: null, backendReachable: false };
+  }
+}
+
+export async function testRazorpayConnection(): Promise<{
+  success: boolean;
+  mode: 'live' | 'test' | null;
+  message: string;
+}> {
+  try {
+    const res = await fetch('/api/razorpay/test');
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: false,
+      mode: null,
+      message: err?.message || 'Unable to verify Razorpay connection.',
+    };
   }
 }
 
