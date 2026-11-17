@@ -593,6 +593,10 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
 // 4. DEV SERVER & STATIC FILE SERVING
 // ==============================================================================
 
+app.get('/health', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     // Mount Vite middlewares in development
@@ -603,15 +607,33 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Ensure dist/ exists even on platforms like Hostinger Express that skip `npm run build`
+    // Ensure dist/ exists even on platforms like Hostinger Express that skip `npm run build`,
+    // without blocking app.listen() so platform health checks never time out with 503.
     const distDir = path.join(__dirname, 'dist');
     const distIndex = path.join(distDir, 'index.html');
-    if (!fs.existsSync(distIndex)) {
-      console.log('[TeqqnoWorld] dist/index.html not found — building production assets with Vite...');
-      const { build: viteBuild } = await import('vite');
-      await viteBuild();
-      console.log('[TeqqnoWorld] Vite production build completed.');
+    let distReady = fs.existsSync(distIndex);
+    let buildPromise: Promise<void> | null = null;
+
+    if (!distReady) {
+      console.log('[TeqqnoWorld] dist/index.html not found — building production assets in background...');
+      buildPromise = (async () => {
+        try {
+          const { build: viteBuild } = await import('vite');
+          await viteBuild();
+          distReady = fs.existsSync(distIndex);
+          console.log('[TeqqnoWorld] Vite production build completed.');
+        } catch (err) {
+          console.error('[TeqqnoWorld] Background Vite build failed:', err);
+        }
+      })();
     }
+
+    app.use(async (_req: Request, _res: Response, next) => {
+      if (!distReady && buildPromise) {
+        await buildPromise;
+      }
+      next();
+    });
 
     // Serve production built assets
     app.use(express.static(distDir));
