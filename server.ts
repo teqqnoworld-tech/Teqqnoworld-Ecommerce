@@ -608,22 +608,29 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.join(__dirname, 'dist');
+    const clientBuildDir = path.join(__dirname, 'client-build');
     const publicDir = path.join(__dirname, 'public');
-    const distIndex = path.join(distDir, 'index.html');
 
-    if (!fs.existsSync(distIndex)) {
-      console.error('[TeqqnoWorld] ERROR: dist/index.html is missing! Run `npm run build` before deploying.');
+    const activeBuildDir = fs.existsSync(path.join(distDir, 'index.html'))
+      ? distDir
+      : clientBuildDir;
+    const activeIndex = path.join(activeBuildDir, 'index.html');
+
+    if (!fs.existsSync(activeIndex)) {
+      console.error('[TeqqnoWorld] ERROR: No production build found in dist/ or client-build/. Run `npm run build` before deploying.');
+    } else {
+      console.log(`[TeqqnoWorld] Serving frontend from: ${path.basename(activeBuildDir)}/`);
     }
 
     // Serve pre-built Vite bundle + static public assets (copyPublicDir: false avoids duplicating 48MB of images)
-    app.use(express.static(distDir, { maxAge: '1d' }));
+    app.use(express.static(activeBuildDir, { maxAge: '1d' }));
     app.use(express.static(publicDir, { maxAge: '7d' }));
 
     app.get('*', (_req: Request, res: Response) => {
-      if (!fs.existsSync(distIndex)) {
-        return res.status(503).send('Production build missing (dist/index.html). Please run npm run build and redeploy.');
+      if (!fs.existsSync(activeIndex)) {
+        return res.status(503).send('Production build missing. Please run npm run build and redeploy.');
       }
-      return res.sendFile(distIndex);
+      return res.sendFile(activeIndex);
     });
   }
 
