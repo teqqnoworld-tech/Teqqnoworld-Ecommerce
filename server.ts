@@ -593,7 +593,8 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
 // ==============================================================================
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isCompiledServer = path.basename(__filename) === 'server.js';
+  if (process.env.NODE_ENV !== 'production' && !isCompiledServer) {
     // Mount Vite middlewares in development
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
