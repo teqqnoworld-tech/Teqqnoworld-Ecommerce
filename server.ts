@@ -2,6 +2,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import nodemailer from 'nodemailer';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -593,8 +594,7 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
 // ==============================================================================
 
 async function startServer() {
-  const isCompiledServer = path.basename(__filename) === 'server.js';
-  if (process.env.NODE_ENV !== 'production' && !isCompiledServer) {
+  if (process.env.NODE_ENV !== 'production') {
     // Mount Vite middlewares in development
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -603,10 +603,20 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    // Ensure dist/ exists even on platforms like Hostinger Express that skip `npm run build`
+    const distDir = path.join(__dirname, 'dist');
+    const distIndex = path.join(distDir, 'index.html');
+    if (!fs.existsSync(distIndex)) {
+      console.log('[TeqqnoWorld] dist/index.html not found — building production assets with Vite...');
+      const { build: viteBuild } = await import('vite');
+      await viteBuild();
+      console.log('[TeqqnoWorld] Vite production build completed.');
+    }
+
     // Serve production built assets
-    app.use(express.static(path.join(__dirname, 'dist')));
+    app.use(express.static(distDir));
     app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+      res.sendFile(distIndex);
     });
   }
 
