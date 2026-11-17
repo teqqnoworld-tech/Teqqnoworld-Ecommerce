@@ -238,6 +238,23 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setTimeout(() => setUpdateSuccessToast(null), 2500);
   };
 
+  const parseOrderArtworkNotes = (notes?: string | null) => {
+    const raw = notes || '';
+    const frontMockupMatch = raw.match(/\[FrontMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
+    const backMockupMatch = raw.match(/\[BackMockup:\s*(https?:\/\/[^\s\]]+)\]/i);
+    const backLogoMatch = raw.match(/\[BackLogo:\s*(https?:\/\/[^\s\]]+)\]/i);
+    const cleanNotes = raw
+      .replace(/\|\s*\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
+      .replace(/\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
+      .trim();
+    return {
+      frontMockupUrl: frontMockupMatch?.[1] || null,
+      backMockupUrl: backMockupMatch?.[1] || null,
+      backLogoUrl: backLogoMatch?.[1] || null,
+      cleanNotes,
+    };
+  };
+
   // Re-send / Send Order Confirmation Email via Hostinger SMTP
   const handleSendOrderConfirmationEmail = async (order: CustomOrderRow) => {
     if (!order.customer_email) {
@@ -252,6 +269,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       const estimatedPrice = (prod?.basePrice || 250) * (order.quantity || 1);
       const gst = Math.round(estimatedPrice * 0.18);
       const total = estimatedPrice + gst;
+      const parsedArt = parseOrderArtworkNotes(order.custom_notes);
 
       const res = await sendOrderConfirmationEmail({
         orderId: order.id,
@@ -265,6 +283,11 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
           quantity: order.quantity || 1,
           price: prod?.basePrice || 250,
           totalPrice: estimatedPrice,
+          logoUrl: order.logo_url || undefined,
+          backLogoUrl: parsedArt.backLogoUrl || undefined,
+          mockupFrontUrl: parsedArt.frontMockupUrl || undefined,
+          mockupBackUrl: parsedArt.backMockupUrl || undefined,
+          designPositionSummary: parsedArt.cleanNotes || undefined,
         }],
         subtotal: estimatedPrice,
         gstAmount: gst,
@@ -790,53 +813,103 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                           </div>
                         </div>
 
-                        {/* Col 2 (4 cols): Product Specs & Custom Notes */}
-                        <div className="md:col-span-5 space-y-2 bg-black/40 p-3.5 rounded-xl border border-zinc-800/60">
-                          <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-bold">
-                            Product & Custom Specifications
-                          </div>
-                          <div className="flex items-start gap-3">
-                            {/* Logo / Thumbnail Preview */}
-                            {order.logo_url ? (
-                              <button
-                                onClick={() => setPreviewLogoUrl(order.logo_url)}
-                                className="w-14 h-14 rounded-xl border border-zinc-700 overflow-hidden bg-zinc-900 p-1 shrink-0 relative group cursor-zoom-in"
-                                title="Click to view full-resolution uploaded logo"
-                              >
-                                <img
-                                  src={order.logo_url}
-                                  alt="Logo"
-                                  className="w-full h-full object-contain"
-                                />
-                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
-                                  <Eye className="w-3.5 h-3.5" />
-                                </div>
-                              </button>
-                            ) : (
-                              <div className="w-14 h-14 rounded-xl border border-zinc-800 bg-zinc-900 flex items-center justify-center text-[9px] text-zinc-500 font-mono text-center p-1 shrink-0">
-                                No Logo
+                        {/* Col 2 (5 cols): Product Specs, Artwork & Placed Mockup Previews */}
+                        {(() => {
+                          const parsedArt = parseOrderArtworkNotes(order.custom_notes);
+                          return (
+                            <div className="md:col-span-5 space-y-2.5 bg-black/40 p-3.5 rounded-xl border border-zinc-800/60">
+                              <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-bold">
+                                Product, Logo & Placement Proof
                               </div>
-                            )}
+                              <div className="flex items-start gap-3">
+                                {/* Logo & Placement Mockup Thumbnails */}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {order.logo_url ? (
+                                    <button
+                                      onClick={() => setPreviewLogoUrl(order.logo_url)}
+                                      className="w-14 h-14 rounded-xl border border-emerald-700/60 overflow-hidden bg-zinc-900 p-1 relative group cursor-zoom-in"
+                                      title="Raw Client Logo / Poster (Click to inspect & download)"
+                                    >
+                                      <img
+                                        src={order.logo_url}
+                                        alt="Client Logo"
+                                        className="w-full h-full object-contain"
+                                      />
+                                      <span className="absolute bottom-0 inset-x-0 bg-emerald-950/90 text-[8px] font-mono text-emerald-300 text-center py-0.5">
+                                        LOGO
+                                      </span>
+                                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </div>
+                                    </button>
+                                  ) : (
+                                    <div className="w-14 h-14 rounded-xl border border-zinc-800 bg-zinc-900 flex items-center justify-center text-[9px] text-zinc-500 font-mono text-center p-1">
+                                      No Logo
+                                    </div>
+                                  )}
 
-                            <div className="space-y-1 min-w-0">
-                              <div className="font-bold text-white truncate">
-                                {product?.name || order.product_id || 'Custom Product Specification'}
+                                  {parsedArt.frontMockupUrl && (
+                                    <button
+                                      onClick={() => setPreviewLogoUrl(parsedArt.frontMockupUrl)}
+                                      className="w-14 h-14 rounded-xl border border-[#FF7A00]/60 overflow-hidden bg-slate-100 p-0.5 relative group cursor-zoom-in"
+                                      title="Placed Product Mockup - Front (Click to inspect & download)"
+                                    >
+                                      <img
+                                        src={parsedArt.frontMockupUrl}
+                                        alt="Product Mockup Front"
+                                        className="w-full h-full object-contain"
+                                      />
+                                      <span className="absolute bottom-0 inset-x-0 bg-black/80 text-[8px] font-mono text-[#FF7A00] text-center py-0.5">
+                                        MOCKUP
+                                      </span>
+                                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </div>
+                                    </button>
+                                  )}
+
+                                  {parsedArt.backMockupUrl && (
+                                    <button
+                                      onClick={() => setPreviewLogoUrl(parsedArt.backMockupUrl)}
+                                      className="w-14 h-14 rounded-xl border border-blue-600/60 overflow-hidden bg-slate-100 p-0.5 relative group cursor-zoom-in"
+                                      title="Placed Product Mockup - Back (Click to inspect & download)"
+                                    >
+                                      <img
+                                        src={parsedArt.backMockupUrl}
+                                        alt="Product Mockup Back"
+                                        className="w-full h-full object-contain"
+                                      />
+                                      <span className="absolute bottom-0 inset-x-0 bg-black/80 text-[8px] font-mono text-blue-300 text-center py-0.5">
+                                        BACK
+                                      </span>
+                                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </div>
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="space-y-1 min-w-0">
+                                  <div className="font-bold text-white truncate">
+                                    {product?.name || order.product_id || 'Custom Product Specification'}
+                                  </div>
+                                  <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-300">
+                                    <span className="bg-[#FF7A00]/20 text-[#FF7A00] px-1.5 py-0.5 rounded font-bold">
+                                      {order.quantity} pcs
+                                    </span>
+                                    <span>·</span>
+                                    <span className="text-zinc-400">₹{unitPrice}/pc</span>
+                                  </div>
+                                  {parsedArt.cleanNotes && (
+                                    <p className="text-[11px] text-zinc-400 line-clamp-3 leading-relaxed font-mono">
+                                      {parsedArt.cleanNotes}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-300">
-                                <span className="bg-[#FF7A00]/20 text-[#FF7A00] px-1.5 py-0.5 rounded font-bold">
-                                  {order.quantity} pcs
-                                </span>
-                                <span>·</span>
-                                <span className="text-zinc-400">₹{unitPrice}/pc</span>
-                              </div>
-                              {order.custom_notes && (
-                                <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed font-mono">
-                                  {order.custom_notes}
-                                </p>
-                              )}
                             </div>
-                          </div>
-                        </div>
+                          );
+                        })()}
 
                         {/* Col 3 (3 cols): Lifecycle Status & Courier Dispatch Controls */}
                         <div className="md:col-span-3 space-y-2.5 bg-black/40 p-3.5 rounded-xl border border-zinc-800/60 flex flex-col justify-between">

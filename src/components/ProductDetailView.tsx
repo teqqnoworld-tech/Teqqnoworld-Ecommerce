@@ -52,6 +52,7 @@ import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
 import { calculateProductPrice, formatCurrencyINR } from '../data/pricingRules';
 import { compressImageFile } from '../utils/imageCompressor';
 import { ProductDesignStudioModal } from './ProductDesignStudioModal';
+import { generateItemMockupSnapshots } from '../utils/mockupSnapshot';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -868,7 +869,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [isAdding, setIsAdding] = useState(false);
   const [addedSuccessToast, setAddedSuccessToast] = useState(false);
 
-  const handleAddToCartClick = () => {
+  const handleAddToCartClick = async () => {
     if (isAdding) return;
     setIsAdding(true);
 
@@ -1022,6 +1023,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: artworkStatus
     };
+
+    try {
+      const { frontMockupDataUrl, backMockupDataUrl } = await generateItemMockupSnapshots(newItem);
+      if (frontMockupDataUrl) newItem.previewUrl = frontMockupDataUrl;
+      if (backMockupDataUrl) newItem.backPreviewUrl = backMockupDataUrl;
+    } catch (snapErr) {
+      console.warn('[ProductDetailView] Snapshot generation skipped:', snapErr);
+    }
 
     onAddToCart(newItem);
     setAddedSuccessToast(true);

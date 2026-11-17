@@ -20,7 +20,12 @@ import {
   saveAbandonedCheckout, 
   markCheckoutRecovered 
 } from '../services/supabaseService';
-import { sendOrderConfirmationEmail } from '../services/emailService';
+import { sendOrderConfirmationEmail, OrderEmailItem } from '../services/emailService';
+import {
+  describeArtworkPlacement,
+  extractArtworkAssetsFromItem,
+  generateItemMockupSnapshots,
+} from '../utils/mockupSnapshot';
 
 interface CheckoutViewProps {
   items: CartItem[];
@@ -165,39 +170,72 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
     try {
       const insertedOrderIds: string[] = [];
+      const emailItems: OrderEmailItem[] = [];
+
+      const safeUploadToSupabase = async (
+        source: string | null | undefined,
+        label: string
+      ): Promise<{ publicUrl: string | null; emailSource: string | undefined }> => {
+        if (!source) return { publicUrl: null, emailSource: undefined };
+        if (source.startsWith('http://') || source.startsWith('https://')) {
+          return { publicUrl: source, emailSource: source };
+        }
+        try {
+          const uploaded = await uploadDataUrlToStorage(source, label);
+          if (uploaded && (uploaded.startsWith('http://') || uploaded.startsWith('https://'))) {
+            return { publicUrl: uploaded, emailSource: uploaded };
+          }
+        } catch (storageError) {
+          console.warn(`[Supabase Storage Warning] Upload failed for ${label}:`, storageError);
+        }
+        // Fallback: pass base64 dataUrl directly to email backend so Admin still receives the image!
+        return {
+          publicUrl: null,
+          emailSource: source.startsWith('data:') ? source : undefined,
+        };
+      };
 
       // 1. Process and insert each cart item into Supabase custom_orders
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        setUploadStepStatus(`Processing ${item.product.name} (${i + 1}/${items.length})...`);
+        setUploadStepStatus(`Preparing artwork & mockup design for ${item.product.name} (${i + 1}/${items.length})...`);
 
-        // Check for uploaded logo and upload to Supabase storage ('brand-logos')
-        let logoUrl: string | null = null;
-        const candidateLogo = item.artwork?.dataUrl || item.frontArtwork?.dataUrl || item.backArtwork?.dataUrl || item.previewUrl;
-        
-        if (candidateLogo) {
-          setUploadStepStatus(`Uploading brand logo for ${item.product.name} to Supabase storage...`);
-          try {
-            logoUrl = await uploadDataUrlToStorage(candidateLogo, `${item.product.id}_${item.color?.name || 'logo'}`);
-          } catch (storageError) {
-            console.warn('[Supabase Storage Warning]: Logo storage upload failed, keeping fallback:', storageError);
-            if (candidateLogo.startsWith('http')) {
-              logoUrl = candidateLogo;
-            }
-          }
-        }
+        const { frontRawLogo, backRawLogo, extraRawLogos } = extractArtworkAssetsFromItem(item);
+        const { frontMockupDataUrl, backMockupDataUrl } = await generateItemMockupSnapshots(item);
+        const designPositionSummary = describeArtworkPlacement(item);
+
+        setUploadStepStatus(`Uploading logo & placement mockup for ${item.product.name} to cloud storage...`);
+
+        const slugBase = `${item.product.id}_${item.color?.name || 'custom'}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        const [frontLogoRes, backLogoRes, frontMockupRes, backMockupRes, ...extraLogoResList] = await Promise.all([
+          safeUploadToSupabase(frontRawLogo, `${slugBase}_logo_front`),
+          safeUploadToSupabase(backRawLogo, `${slugBase}_logo_back`),
+          safeUploadToSupabase(frontMockupDataUrl, `${slugBase}_mockup_front`),
+          safeUploadToSupabase(backMockupDataUrl, `${slugBase}_mockup_back`),
+          ...extraRawLogos.slice(0, 4).map((extraSrc, idx) =>
+            safeUploadToSupabase(extraSrc, `${slugBase}_extra_${idx + 1}`)
+          ),
+        ]);
+
+        const primaryLogoDbUrl = frontLogoRes.publicUrl || backLogoRes.publicUrl || frontMockupRes.publicUrl || null;
 
         // Map form fields to exact Supabase custom_orders columns
         const notesParts: string[] = [];
         if (item.color?.name) notesParts.push(`Color: ${item.color.name}`);
         if (item.size) notesParts.push(`Size: ${item.size}`);
-        if (item.printPlacement) notesParts.push(`Placement: ${item.printPlacement}`);
         if (item.printMethod) notesParts.push(`Method: ${item.printMethod}`);
+        if (designPositionSummary) notesParts.push(`Position & Layout: ${designPositionSummary}`);
         if (item.customNotes) notesParts.push(`Notes: ${item.customNotes}`);
         if (poNumber) notesParts.push(`PO#: ${poNumber}`);
         if (isB2BInvoice && gstin) notesParts.push(`GSTIN: ${gstin}`);
         notesParts.push(`Address: ${street}, ${city}, ${state} - ${pincode}`);
         notesParts.push(`Payment: ${paymentMode}`);
+
+        // Attach structured URLs at end of custom_notes for Admin Hub multi-preview gallery
+        if (frontMockupRes.publicUrl) notesParts.push(`[FrontMockup: ${frontMockupRes.publicUrl}]`);
+        if (backMockupRes.publicUrl) notesParts.push(`[BackMockup: ${backMockupRes.publicUrl}]`);
+        if (backLogoRes.publicUrl) notesParts.push(`[BackLogo: ${backLogoRes.publicUrl}]`);
 
         const orderRow = {
           customer_name: fullName.trim(),
@@ -206,7 +244,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           phone: phone.trim(),
           product_id: item.product.id,
           quantity: item.quantity,
-          logo_url: logoUrl,
+          logo_url: primaryLogoDbUrl,
           custom_notes: notesParts.join(' | ') || 'Order placed via checkout',
           status: 'pending' as const,
         };
@@ -228,6 +266,27 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         if (data && data[0]?.id) {
           insertedOrderIds.push(data[0].id);
         }
+
+        emailItems.push({
+          name: item.product.name,
+          color: item.color?.name,
+          size: item.size,
+          sizeDistribution: item.sizeDistribution,
+          printMethod: item.printMethod,
+          printPlacement: item.printPlacement,
+          frontPlacement: item.frontPlacement,
+          backPlacement: item.backPlacement,
+          designPositionSummary,
+          logoUrl: frontLogoRes.emailSource,
+          backLogoUrl: backLogoRes.emailSource,
+          mockupFrontUrl: frontMockupRes.emailSource,
+          mockupBackUrl: backMockupRes.emailSource,
+          extraArtworkUrls: extraLogoResList.map((r) => r.emailSource).filter((u): u is string => Boolean(u)),
+          customNotes: item.customNotes,
+          quantity: item.quantity,
+          price: item.unitPrice,
+          totalPrice: item.totalPrice,
+        });
       }
 
       // 2. Prepare confirmation order object
@@ -278,7 +337,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       } catch {}
 
       // Trigger automated Hostinger SMTP order confirmation (Customer) & New Order Alert (Admin)
-      setUploadStepStatus('Sending order confirmation & admin notification emails...');
+      setUploadStepStatus('Sending order confirmation & admin artwork emails...');
       const emailResult = await sendOrderConfirmationEmail({
         orderId: primaryId,
         orderNumber,
@@ -288,16 +347,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         phone: phone.trim(),
         gstin: isB2BInvoice && gstin ? gstin.trim() : undefined,
         paymentMode,
-        items: items.map(item => ({
-          name: item.product.name,
-          color: item.color?.name,
-          size: item.size,
-          printMethod: item.printMethod,
-          printPlacement: item.printPlacement,
-          quantity: item.quantity,
-          price: item.unitPrice,
-          totalPrice: item.totalPrice,
-        })),
+        items: emailItems,
         subtotal,
         gstAmount,
         shippingFee,

@@ -89,8 +89,18 @@ interface OrderItemPayload {
   name: string;
   color?: string;
   size?: string;
+  sizeDistribution?: Record<string, number>;
   printMethod?: string;
   printPlacement?: string;
+  frontPlacement?: string;
+  backPlacement?: string;
+  designPositionSummary?: string;
+  logoUrl?: string;
+  backLogoUrl?: string;
+  mockupFrontUrl?: string;
+  mockupBackUrl?: string;
+  extraArtworkUrls?: string[];
+  customNotes?: string;
   quantity: number;
   price: number;
   totalPrice?: number;
@@ -119,13 +129,158 @@ interface OrderConfirmationPayload {
   };
 }
 
-function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
+interface EmailAttachmentItem {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+  cid?: string;
+  contentDisposition?: 'inline' | 'attachment';
+}
+
+interface PreparedOrderMedia {
+  imgSrcBySource: Map<string, string>;
+  adminAttachments: EmailAttachmentItem[];
+  customerInlineAttachments: EmailAttachmentItem[];
+}
+
+function parseDataUrl(src: string): { buffer: Buffer; mime: string; ext: string } | null {
+  const match = src.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
+  if (!match) return null;
+  const mime = match[1];
+  const ext = (mime.split('/')[1] || 'png').replace('svg+xml', 'svg').replace(/[^a-zA-Z0-9]/g, '');
+  return {
+    buffer: Buffer.from(match[2], 'base64'),
+    mime,
+    ext: ext || 'png',
+  };
+}
+
+async function fetchUrlBuffer(url: string): Promise<{ buffer: Buffer; mime: string; ext: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const contentType = (resp.headers.get('content-type') || 'image/webp').split(';')[0].trim();
+    const arr = await resp.arrayBuffer();
+    const extFromUrl = url.split('?')[0].split('.').pop()?.replace(/[^a-zA-Z0-9]/g, '');
+    const ext = extFromUrl || contentType.split('/')[1]?.replace(/[^a-zA-Z0-9]/g, '') || 'webp';
+    return {
+      buffer: Buffer.from(arr),
+      mime: contentType,
+      ext,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function prepareOrderMedia(payload: OrderConfirmationPayload): Promise<PreparedOrderMedia> {
+  const imgSrcBySource = new Map<string, string>();
+  const adminAttachments: EmailAttachmentItem[] = [];
+  const customerInlineAttachments: EmailAttachmentItem[] = [];
+  const orderTag = (payload.orderNumber || payload.orderId || 'ORDER').replace(/[^a-zA-Z0-9_-]/g, '');
+  let cidCounter = 1;
+
+  const processAsset = async (
+    src: string | undefined,
+    fileBase: string,
+    includeForCustomerInline = false
+  ) => {
+    if (!src) return;
+    if (imgSrcBySource.has(src)) return;
+
+    const cleanFileBase = fileBase.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    if (src.startsWith('data:')) {
+      const parsed = parseDataUrl(src);
+      if (!parsed) return;
+      const cid = `tq_${orderTag}_${cidCounter++}@teqqnoworld.com`;
+      imgSrcBySource.set(src, `cid:${cid}`);
+
+      // Inline CID copy so Gmail displays it inside the email card
+      adminAttachments.push({
+        filename: `${orderTag}_${cleanFileBase}.${parsed.ext}`,
+        content: parsed.buffer,
+        contentType: parsed.mime,
+        cid,
+        contentDisposition: 'inline',
+      });
+      // Explicit downloadable attachment copy for Admin
+      adminAttachments.push({
+        filename: `${orderTag}_${cleanFileBase}_download.${parsed.ext}`,
+        content: parsed.buffer,
+        contentType: parsed.mime,
+        contentDisposition: 'attachment',
+      });
+      if (includeForCustomerInline) {
+        customerInlineAttachments.push({
+          filename: `${orderTag}_${cleanFileBase}.${parsed.ext}`,
+          content: parsed.buffer,
+          contentType: parsed.mime,
+          cid,
+          contentDisposition: 'inline',
+        });
+      }
+      return;
+    }
+
+    if (src.startsWith('http://') || src.startsWith('https://')) {
+      imgSrcBySource.set(src, src);
+      const fetched = await fetchUrlBuffer(src);
+      if (fetched) {
+        adminAttachments.push({
+          filename: `${orderTag}_${cleanFileBase}.${fetched.ext}`,
+          content: fetched.buffer,
+          contentType: fetched.mime,
+          contentDisposition: 'attachment',
+        });
+      }
+    }
+  };
+
+  for (let idx = 0; idx < payload.items.length; idx++) {
+    const item = payload.items[idx];
+    const itemNum = idx + 1;
+    await Promise.all([
+      processAsset(item.mockupFrontUrl, `Item${itemNum}_Product_Mockup_Front`, true),
+      processAsset(item.mockupBackUrl, `Item${itemNum}_Product_Mockup_Back`, true),
+      processAsset(item.logoUrl, `Item${itemNum}_Customer_Logo_Front`, false),
+      processAsset(item.backLogoUrl, `Item${itemNum}_Customer_Logo_Back`, false),
+      ...(item.extraArtworkUrls || []).map((extraUrl, eIdx) =>
+        processAsset(extraUrl, `Item${itemNum}_Extra_Artwork_${eIdx + 1}`, false)
+      ),
+    ]);
+  }
+
+  return { imgSrcBySource, adminAttachments, customerInlineAttachments };
+}
+
+function renderMediaCardHtml(title: string, src: string | undefined, media: PreparedOrderMedia, accentColor = '#FF7A00'): string {
+  if (!src) return '';
+  const imgSrc = media.imgSrcBySource.get(src) || src;
+  const isHttp = src.startsWith('http://') || src.startsWith('https://');
+  return `
+    <td width="50%" valign="top" style="padding: 6px;">
+      <div style="background: #111216; border: 1px solid #2C2E38; border-radius: 10px; padding: 10px; text-align: center;">
+        <div style="font-size: 10px; font-weight: 800; color: ${accentColor}; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px;">${escapeHtml(title)}</div>
+        <div style="background: #F8FAFC; border-radius: 8px; padding: 6px; margin-bottom: 8px;">
+          <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(title)}" style="max-width: 100%; max-height: 180px; width: auto; height: auto; display: block; margin: 0 auto; border-radius: 6px;" />
+        </div>
+        ${isHttp ? `<a href="${escapeHtml(src)}" target="_blank" style="display: inline-block; font-size: 11px; font-weight: 700; color: #FFFFFF; background: ${accentColor}; text-decoration: none; padding: 5px 10px; border-radius: 6px;">Open / Download Full-Res</a>` : `<span style="font-size: 10px; color: #9CA3AF;">Attached at bottom of email</span>`}
+      </div>
+    </td>
+  `;
+}
+
+function generateAdminOrderAlertHtml(data: OrderConfirmationPayload, media: PreparedOrderMedia): string {
   const displayOrderNum = escapeHtml(data.orderNumber || data.orderId);
   const cleanPhoneDigits = (data.phone || '').replace(/[^0-9]/g, '');
   const waDigits = cleanPhoneDigits.length === 10 ? `91${cleanPhoneDigits}` : cleanPhoneDigits;
 
   const itemsHtml = data.items
-    .map((item) => {
+    .map((item, idx) => {
       const lineTotal = item.totalPrice || item.price * item.quantity;
       const specs = [
         item.color ? `Color: ${escapeHtml(item.color)}` : null,
@@ -136,17 +291,53 @@ function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
         .filter(Boolean)
         .join(' • ');
 
+      const cards: string[] = [];
+      if (item.mockupFrontUrl) cards.push(renderMediaCardHtml('Product Design (Front View)', item.mockupFrontUrl, media, '#FF7A00'));
+      if (item.mockupBackUrl) cards.push(renderMediaCardHtml('Product Design (Back View)', item.mockupBackUrl, media, '#FF7A00'));
+      if (item.logoUrl) cards.push(renderMediaCardHtml('Customer Raw Logo / Poster (Front)', item.logoUrl, media, '#1EBE5D'));
+      if (item.backLogoUrl) cards.push(renderMediaCardHtml('Customer Raw Logo / Poster (Back)', item.backLogoUrl, media, '#1EBE5D'));
+      (item.extraArtworkUrls || []).forEach((u, eIdx) => {
+        cards.push(renderMediaCardHtml(`Extra Studio Artwork #${eIdx + 1}`, u, media, '#3B82F6'));
+      });
+
+      const rowsHtml: string[] = [];
+      for (let c = 0; c < cards.length; c += 2) {
+        rowsHtml.push(`<tr>${cards[c]}${cards[c + 1] || '<td width="50%"></td>'}</tr>`);
+      }
+
       return `
         <tr>
-          <td style="padding: 12px; border-bottom: 1px solid #282A33;">
-            <div style="font-size: 13px; font-weight: 700; color: #FFFFFF;">${escapeHtml(item.name)}</div>
-            ${specs ? `<div style="font-size: 11px; color: #9CA3AF; margin-top: 3px;">${specs}</div>` : ''}
-          </td>
-          <td style="padding: 12px; border-bottom: 1px solid #282A33; text-align: center; font-size: 13px; font-weight: 700; color: #E5E7EB; font-family: monospace;">
-            ${item.quantity}
-          </td>
-          <td style="padding: 12px; border-bottom: 1px solid #282A33; text-align: right; font-size: 13px; font-weight: 700; color: #FF7A00; font-family: monospace;">
-            ₹${lineTotal.toLocaleString('en-IN')}.00
+          <td colspan="3" style="padding: 14px 12px; border-bottom: 1px solid #282A33;">
+            <table width="100%" border="0" cellspacing="0" cellpadding="0">
+              <tr>
+                <td>
+                  <div style="font-size: 14px; font-weight: 800; color: #FFFFFF;">${idx + 1}. ${escapeHtml(item.name)}</div>
+                  ${specs ? `<div style="font-size: 11px; color: #9CA3AF; margin-top: 3px;">${specs}</div>` : ''}
+                </td>
+                <td style="text-align: center; font-size: 13px; font-weight: 700; color: #E5E7EB; font-family: monospace; width: 60px;">
+                  × ${item.quantity}
+                </td>
+                <td style="text-align: right; font-size: 14px; font-weight: 800; color: #FF7A00; font-family: monospace; width: 110px;">
+                  ₹${lineTotal.toLocaleString('en-IN')}.00
+                </td>
+              </tr>
+            </table>
+
+            ${
+              item.designPositionSummary || item.customNotes
+                ? `<div style="margin-top: 10px; background: #1B1D24; border-left: 3px solid #FF7A00; border-radius: 6px; padding: 10px 12px; font-size: 11px; color: #E5E7EB; line-height: 1.55;">
+                    <div style="font-size: 10px; font-weight: 800; color: #FF7A00; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px;">📐 Logo & Design Position Specifications</div>
+                    ${item.designPositionSummary ? `<div>${escapeHtml(item.designPositionSummary)}</div>` : ''}
+                    ${item.customNotes ? `<div style="margin-top: 4px; color: #FCD34D;"><strong>Customer Note:</strong> ${escapeHtml(item.customNotes)}</div>` : ''}
+                  </div>`
+                : ''
+            }
+
+            ${
+              rowsHtml.length > 0
+                ? `<table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 10px;">${rowsHtml.join('')}</table>`
+                : ''
+            }
           </td>
         </tr>
       `;
@@ -165,7 +356,7 @@ function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
   <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#0B0B0D; padding:24px 12px;">
     <tr>
       <td align="center">
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:620px; background-color:#16171B; border:1px solid #FF7A00; border-radius:16px; overflow:hidden;">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:660px; background-color:#16171B; border:1px solid #FF7A00; border-radius:16px; overflow:hidden;">
           <tr>
             <td style="background:#1F2026; padding:22px 24px; border-bottom:2px solid #FF7A00;">
               <div style="font-size:11px; font-weight:800; letter-spacing:2px; color:#FF7A00; text-transform:uppercase;">TEQQNOWORLD ADMIN ALERT</div>
@@ -189,13 +380,13 @@ function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
             </td>
           </tr>
           <tr>
-            <td style="padding:0 24px 16px 24px;">
+            <td style="padding:0 16px 16px 16px;">
               <table width="100%" border="0" cellspacing="0" cellpadding="0">
                 <thead>
                   <tr style="border-bottom:1px solid #2F313B;">
-                    <th style="padding:8px 12px; text-align:left; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Item</th>
-                    <th style="padding:8px 12px; text-align:center; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Qty</th>
-                    <th style="padding:8px 12px; text-align:right; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Total</th>
+                    <th style="padding:8px 12px; text-align:left; font-size:11px; color:#9CA3AF; text-transform:uppercase;">Ordered Product & Artwork Proof</th>
+                    <th style="padding:8px 12px; text-align:center; font-size:11px; color:#9CA3AF; text-transform:uppercase; width:60px;">Qty</th>
+                    <th style="padding:8px 12px; text-align:right; font-size:11px; color:#9CA3AF; text-transform:uppercase; width:110px;">Total</th>
                   </tr>
                 </thead>
                 <tbody>${itemsHtml}</tbody>
@@ -216,7 +407,7 @@ function generateAdminOrderAlertHtml(data: OrderConfirmationPayload): string {
 </html>`;
 }
 
-function generateOrderEmailHtml(data: OrderConfirmationPayload): string {
+function generateOrderEmailHtml(data: OrderConfirmationPayload, media: PreparedOrderMedia): string {
   const displayOrderNum = data.orderNumber || data.orderId;
   const dispatchTimeline = data.estimatedDispatch || '24-48h Fast Dispatch';
 
@@ -224,21 +415,39 @@ function generateOrderEmailHtml(data: OrderConfirmationPayload): string {
     .map((item) => {
       const lineTotal = item.totalPrice || item.price * item.quantity;
       const details = [
-        item.color ? `Color: ${item.color}` : null,
-        item.size ? `Size: ${item.size}` : null,
+        item.color ? `Color: ${escapeHtml(item.color)}` : null,
+        item.size ? `Size: ${escapeHtml(item.size)}` : null,
+        item.printMethod ? `Print: ${escapeHtml(item.printMethod)}` : null,
+        item.printPlacement ? `Placement: ${escapeHtml(item.printPlacement)}` : null,
       ]
         .filter(Boolean)
         .join(' • ');
+
+      const frontMockSrc = item.mockupFrontUrl ? (media.imgSrcBySource.get(item.mockupFrontUrl) || item.mockupFrontUrl) : '';
+      const backMockSrc = item.mockupBackUrl ? (media.imgSrcBySource.get(item.mockupBackUrl) || item.mockupBackUrl) : '';
 
       return `
         <tr>
           <td style="padding: 16px 12px; border-bottom: 1px solid #282A33;">
             <div style="font-size: 14px; font-weight: 700; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-              ${item.name}
+              ${escapeHtml(item.name)}
             </div>
             ${
               details
                 ? `<div style="font-size: 12px; color: #9CA3AF; margin-top: 4px; font-family: -apple-system, sans-serif;">${details}</div>`
+                : ''
+            }
+            ${
+              item.designPositionSummary
+                ? `<div style="font-size: 11px; color: #D1D5DB; margin-top: 4px; background: #1B1D24; padding: 6px 8px; border-radius: 6px; border-left: 2px solid #FF7A00;">${escapeHtml(item.designPositionSummary)}</div>`
+                : ''
+            }
+            ${
+              frontMockSrc || backMockSrc
+                ? `<div style="margin-top: 8px; display: flex; gap: 8px;">
+                    ${frontMockSrc ? `<img src="${escapeHtml(frontMockSrc)}" alt="Front Mockup" style="height: 84px; width: auto; background: #F8FAFC; padding: 4px; border-radius: 8px; border: 1px solid #2F313B; margin-right: 8px;" />` : ''}
+                    ${backMockSrc ? `<img src="${escapeHtml(backMockSrc)}" alt="Back Mockup" style="height: 84px; width: auto; background: #F8FAFC; padding: 4px; border-radius: 8px; border: 1px solid #2F313B;" />` : ''}
+                  </div>`
                 : ''
             }
           </td>
@@ -447,10 +656,12 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
     const recipientEmail = payload.customerEmail.trim();
     const displayOrderNum = payload.orderNumber || payload.orderId;
 
-    const customerHtml = generateOrderEmailHtml(payload);
+    const media = await prepareOrderMedia(payload);
+
+    const customerHtml = generateOrderEmailHtml(payload, media);
     const customerSubject = `Order Confirmed: #${displayOrderNum} - TeqqnoWorld`;
 
-    const adminHtml = generateAdminOrderAlertHtml(payload);
+    const adminHtml = generateAdminOrderAlertHtml(payload, media);
     const adminSubject = `New Order #${displayOrderNum} (₹${Number(payload.total || 0).toLocaleString('en-IN')}) - ${payload.customerName}`;
 
     // If Hostinger credentials are not yet set in environment, return simulated status clearly
@@ -478,6 +689,7 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
         replyTo: cfg.primaryAdminEmail,
         subject: customerSubject,
         html: customerHtml,
+        attachments: media.customerInlineAttachments,
       }),
       transporter.sendMail({
         from: `"TeqqnoWorld Store Alerts" <${senderEmail}>`,
@@ -485,6 +697,7 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
         replyTo: recipientEmail,
         subject: adminSubject,
         html: adminHtml,
+        attachments: media.adminAttachments,
       }),
     ]);
 

@@ -157,6 +157,7 @@ export interface CartItem {
   frontPlacement?: string;
   backPlacement?: string;
   previewUrl?: string;
+  backPreviewUrl?: string;
   customNotes?: string;
   voiceNoteUrl?: string;
   artworkStatus?: 'no_artwork' | 'uploading' | 'uploaded' | 'awaiting_review' | 'approved' | 'revision_required';

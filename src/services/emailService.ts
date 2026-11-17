@@ -2,8 +2,18 @@ export interface OrderEmailItem {
   name: string;
   color?: string;
   size?: string;
+  sizeDistribution?: Record<string, number>;
   printMethod?: string;
   printPlacement?: string;
+  frontPlacement?: string;
+  backPlacement?: string;
+  designPositionSummary?: string;
+  logoUrl?: string;
+  backLogoUrl?: string;
+  mockupFrontUrl?: string;
+  mockupBackUrl?: string;
+  extraArtworkUrls?: string[];
+  customNotes?: string;
   quantity: number;
   price: number;
   totalPrice?: number;
@@ -76,7 +86,7 @@ export async function sendOrderConfirmationEmail(
 ): Promise<EmailResponse> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch('/api/send-order-email', {
       method: 'POST',
