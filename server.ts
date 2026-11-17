@@ -607,38 +607,23 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Ensure dist/ exists even on platforms like Hostinger Express that skip `npm run build`,
-    // without blocking app.listen() so platform health checks never time out with 503.
     const distDir = path.join(__dirname, 'dist');
+    const publicDir = path.join(__dirname, 'public');
     const distIndex = path.join(distDir, 'index.html');
-    let distReady = fs.existsSync(distIndex);
-    let buildPromise: Promise<void> | null = null;
 
-    if (!distReady) {
-      console.log('[TeqqnoWorld] dist/index.html not found — building production assets in background...');
-      buildPromise = (async () => {
-        try {
-          const { build: viteBuild } = await import('vite');
-          await viteBuild();
-          distReady = fs.existsSync(distIndex);
-          console.log('[TeqqnoWorld] Vite production build completed.');
-        } catch (err) {
-          console.error('[TeqqnoWorld] Background Vite build failed:', err);
-        }
-      })();
+    if (!fs.existsSync(distIndex)) {
+      console.error('[TeqqnoWorld] ERROR: dist/index.html is missing! Run `npm run build` before deploying.');
     }
 
-    app.use(async (_req: Request, _res: Response, next) => {
-      if (!distReady && buildPromise) {
-        await buildPromise;
-      }
-      next();
-    });
+    // Serve pre-built Vite bundle + static public assets (copyPublicDir: false avoids duplicating 48MB of images)
+    app.use(express.static(distDir, { maxAge: '1d' }));
+    app.use(express.static(publicDir, { maxAge: '7d' }));
 
-    // Serve production built assets
-    app.use(express.static(distDir));
     app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(distIndex);
+      if (!fs.existsSync(distIndex)) {
+        return res.status(503).send('Production build missing (dist/index.html). Please run npm run build and redeploy.');
+      }
+      return res.sendFile(distIndex);
     });
   }
 

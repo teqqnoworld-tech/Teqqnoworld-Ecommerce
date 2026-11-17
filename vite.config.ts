@@ -20,6 +20,7 @@ export default defineConfig(() => {
     },
     build: {
       target: 'es2020',
+      copyPublicDir: false,
       cssCodeSplit: true,
       chunkSizeWarningLimit: 800,
       rollupOptions: {
