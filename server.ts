@@ -1337,13 +1337,34 @@ app.get('/health', (_req: Request, res: Response) => {
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
-    // Mount Vite middlewares in development
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
+    // Initialize Vite dev middleware without blocking port 3000 from binding immediately on cold boot
+    let viteMiddlewarePromise: Promise<any> | null = null;
+    const getViteMiddleware = () => {
+      if (!viteMiddlewarePromise) {
+        viteMiddlewarePromise = import('vite').then(async ({ createServer: createViteServer }) => {
+          const vite = await createViteServer({
+            server: { middlewareMode: true },
+            appType: 'spa',
+          });
+          console.log('[TeqqnoWorld] Vite dev middleware ready');
+          return vite.middlewares;
+        });
+      }
+      return viteMiddlewarePromise;
+    };
+
+    void getViteMiddleware().catch((err) => {
+      console.error('[TeqqnoWorld] Vite dev middleware initialization error:', err);
     });
-    app.use(vite.middlewares);
+
+    app.use(async (req, res, next) => {
+      try {
+        const middlewares = await getViteMiddleware();
+        return middlewares(req, res, next);
+      } catch (err) {
+        return next(err);
+      }
+    });
   } else {
     const distDir = path.join(__dirname, 'dist');
     const clientBuildDir = path.join(__dirname, 'client-build');
