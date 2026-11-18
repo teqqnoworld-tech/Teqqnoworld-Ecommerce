@@ -14,8 +14,11 @@ import {
   Loader2,
   Wallet,
   Percent,
-  MapPin
+  MapPin,
+  Tag,
+  X
 } from 'lucide-react';
+import { NewCustomerPromoBanner } from './NewCustomerPromoBanner';
 import { CartItem, ShippingAddress, Order, UserProfile } from '../types';
 import { supabase } from '../lib/supabase';
 import { 
@@ -102,15 +105,99 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [orderError, setOrderError] = useState<string | null>(null);
   const [uploadStepStatus, setUploadStepStatus] = useState<string>('');
 
-  // Financial calculations
+  // New Customer 10% OFF Promo Code State (synced with CartDrawer session)
+  const [promoInput, setPromoInput] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem('teqqno_applied_coupon') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [appliedPromoCode, setAppliedPromoCode] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('teqqno_applied_coupon') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [promoFeedback, setPromoFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(() => {
+    try {
+      const existing = sessionStorage.getItem('teqqno_applied_coupon');
+      if (existing === 'WELCOME10' || existing === 'TEQQNO10') {
+        return { type: 'success', text: `🎉 ${existing} applied — 10% New Customer discount active!` };
+      }
+      if (existing === 'TEQQNOBULK') {
+        return { type: 'success', text: `Bulk voucher TEQQNOBULK active!` };
+      }
+    } catch {}
+    return null;
+  });
+
+  // Financial calculations (with promo discount applied pre-GST)
   const subtotal = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  const discountAmount =
+    appliedPromoCode === 'WELCOME10' || appliedPromoCode === 'TEQQNO10'
+      ? Math.round(subtotal * 0.1)
+      : appliedPromoCode === 'TEQQNOBULK'
+        ? Math.min(subtotal, 500)
+        : 0;
+  const discountedSubtotal = Math.max(0, subtotal - discountAmount);
   const shippingFee = subtotal >= 1999 || subtotal === 0 ? 0 : 149;
   const gstRate = 0.18;
-  const gstAmount = Math.round(subtotal * gstRate);
-  const total = subtotal + shippingFee + gstAmount;
+  const gstAmount = Math.round(discountedSubtotal * gstRate);
+  const total = discountedSubtotal + shippingFee + gstAmount;
   const halfAdvanceAmount = Math.round(total * 0.5);
   const payableNow = paymentMode === 'Partial Payment (50% Advance)' ? halfAdvanceAmount : total;
   const balanceDue = Math.max(0, total - payableNow);
+
+  const handleApplyPromoCode = (rawCode?: string) => {
+    const code = (rawCode ?? promoInput).trim().toUpperCase();
+    if (!code) {
+      setPromoFeedback({ type: 'error', text: 'Enter code WELCOME10 to unlock 10% OFF.' });
+      return;
+    }
+    if (code === 'WELCOME10' || code === 'TEQQNO10' || code === 'WELCOME12') {
+      const normalized = code === 'WELCOME12' ? 'WELCOME10' : code;
+      const saved = Math.round(subtotal * 0.1);
+      setAppliedPromoCode(normalized);
+      setPromoInput(normalized);
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', normalized);
+      } catch {}
+      setPromoFeedback({
+        type: 'success',
+        text: `🎉 Code ${normalized} applied! You saved ₹${saved.toLocaleString('en-IN')} (10% OFF).`,
+      });
+    } else if (code === 'TEQQNOBULK') {
+      const saved = Math.min(subtotal, 500);
+      setAppliedPromoCode('TEQQNOBULK');
+      setPromoInput('TEQQNOBULK');
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', 'TEQQNOBULK');
+      } catch {}
+      setPromoFeedback({
+        type: 'success',
+        text: `Bulk voucher applied! Saved ₹${saved.toLocaleString('en-IN')}.`,
+      });
+    } else {
+      setPromoFeedback({
+        type: 'error',
+        text: 'Invalid promo code. Use WELCOME10 for 10% OFF on your first order.',
+      });
+    }
+  };
+
+  const handleRemovePromoCode = () => {
+    setAppliedPromoCode(null);
+    setPromoInput('');
+    setPromoFeedback(null);
+    try {
+      sessionStorage.removeItem('teqqno_applied_coupon');
+    } catch {}
+  };
 
   useEffect(() => {
     getRazorpayStatus().then(setRazorpayStatus).catch(() => {});
@@ -361,6 +448,9 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         if (poNumber) notesParts.push(`PO#: ${poNumber}`);
         if (isB2BInvoice && gstin) notesParts.push(`GSTIN: ${gstin}`);
         notesParts.push(`Address: ${street}, ${city}, ${state} - ${pincode}`);
+        if (appliedPromoCode && discountAmount > 0) {
+          notesParts.push(`Promo: ${appliedPromoCode} (-₹${discountAmount})`);
+        }
         notesParts.push(`Payment Plan: ${paymentMode}`);
         notesParts.push(`Paid: ₹${payableNow} | Balance Due: ₹${balanceDue}`);
         if (razorpayPaymentId) {
@@ -450,7 +540,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         orderNumber,
         createdAt: new Date().toISOString(),
         items: [...items],
-        subtotal,
+        subtotal: discountedSubtotal,
         gstRate,
         gstAmount,
         shippingFee,
@@ -479,6 +569,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       });
       try {
         sessionStorage.removeItem('teqqno_checkout_session_id');
+        sessionStorage.removeItem('teqqno_applied_coupon');
       } catch {}
 
       // Trigger automated Hostinger SMTP order confirmation (Customer) & New Order Alert (Admin)
@@ -496,7 +587,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         balanceDue,
         razorpayPaymentId,
         items: emailItems,
-        subtotal,
+        subtotal: discountedSubtotal,
         gstAmount,
         shippingFee,
         total,
@@ -556,6 +647,14 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             <span>256-Bit SSL Encrypted Procurement Checkout</span>
           </div>
         </div>
+
+        {/* New Customer 10% OFF Promo Banner with Old Festive Sparkler Animation */}
+        <NewCustomerPromoBanner
+          appliedCode={appliedPromoCode}
+          discountAmount={discountAmount}
+          onApplyPromo={(code) => handleApplyPromoCode(code)}
+          onRemovePromo={handleRemovePromoCode}
+        />
 
         <form onSubmit={handleSubmitOrder} className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
@@ -976,12 +1075,81 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 ))}
               </div>
 
+              {/* Promo Code Input & Quick WELCOME10 Chip */}
+              <div className="bg-[#FAF9FD] border border-[#ECEAF3] rounded-xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#0B0B0D]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-[#FF7A00]" />
+                    <span>Promo / New Customer Code</span>
+                  </span>
+                  {!appliedPromoCode && (
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPromoCode('WELCOME10')}
+                      className="text-[11px] font-mono font-bold text-[#FF7A00] hover:underline cursor-pointer"
+                    >
+                      Tap to apply WELCOME10
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter code (e.g. WELCOME10)"
+                    value={promoInput}
+                    onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleApplyPromoCode();
+                      }
+                    }}
+                    className="flex-1 px-3 py-2 text-xs font-mono uppercase bg-white border border-zinc-300 rounded-lg focus:border-[#FF7A00] outline-none"
+                  />
+                  {appliedPromoCode ? (
+                    <button
+                      type="button"
+                      onClick={handleRemovePromoCode}
+                      className="px-3 py-2 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Remove</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPromoCode()}
+                      className="px-4 py-2 rounded-lg bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      Apply
+                    </button>
+                  )}
+                </div>
+
+                {promoFeedback && (
+                  <p
+                    className={`text-[11px] font-semibold ${
+                      promoFeedback.type === 'success' ? 'text-emerald-700' : 'text-red-600'
+                    }`}
+                  >
+                    {promoFeedback.text}
+                  </p>
+                )}
+              </div>
+
               {/* Cost Breakdown */}
               <div className="space-y-2 text-xs text-zinc-600 pt-2">
                 <div className="flex justify-between">
                   <span>Product Subtotal:</span>
                   <span className="font-mono text-zinc-800">₹{subtotal.toLocaleString('en-IN')}</span>
                 </div>
+                {discountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-semibold">
+                    <span>Promo Discount ({appliedPromoCode} · 10% OFF):</span>
+                    <span className="font-mono">-₹{discountAmount.toLocaleString('en-IN')}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span>Pan-India Air Logistics:</span>
                   <span className="font-mono">

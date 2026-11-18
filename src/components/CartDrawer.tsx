@@ -19,36 +19,63 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onRemoveItem,
   onProceedToCheckout,
 }) => {
-  const [couponCode, setCouponCode] = useState('');
-  const [couponDiscount, setCouponDiscount] = useState(0);
+  const [couponCode, setCouponCode] = useState(() => {
+    try {
+      return sessionStorage.getItem('teqqno_applied_coupon') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [appliedCode, setAppliedCode] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('teqqno_applied_coupon') || null;
+    } catch {
+      return null;
+    }
+  });
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const couponDiscount =
+    appliedCode === 'WELCOME10' || appliedCode === 'TEQQNO10'
+      ? Math.round(subtotal * 0.1)
+      : appliedCode === 'TEQQNOBULK'
+        ? Math.min(subtotal, 500)
+        : 0;
   const freeShippingThreshold = 1999;
   const shippingFee = subtotal >= freeShippingThreshold || subtotal === 0 ? 0 : 149;
   const gstAmount = Math.round(Math.max(0, subtotal - couponDiscount) * 0.18);
   const total = Math.max(0, subtotal - couponDiscount) + shippingFee + gstAmount;
 
-  const handleApplyCoupon = (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = couponCode.trim().toUpperCase();
-    if (code === 'WELCOME10' || code === 'TEQQNO10') {
-      const discount = Math.round(subtotal * 0.10);
-      setCouponDiscount(discount);
-      setCouponMessage(`🎉 First Order 10% OFF applied! Saved ₹${discount}`);
-    } else if (code === 'WELCOME12') {
-      const discount = Math.round(subtotal * 0.10);
-      setCouponDiscount(discount);
-      setCouponMessage(`🎉 Code WELCOME10 (10% OFF) applied! Saved ₹${discount}`);
+  const applyCodeValue = (rawCode: string) => {
+    const code = rawCode.trim().toUpperCase();
+    if (code === 'WELCOME10' || code === 'TEQQNO10' || code === 'WELCOME12') {
+      const normalized = code === 'WELCOME12' ? 'WELCOME10' : code;
+      const discount = Math.round(subtotal * 0.1);
+      setAppliedCode(normalized);
+      setCouponCode(normalized);
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', normalized);
+      } catch {}
+      setCouponMessage(`🎉 First Order 10% OFF applied! Saved ₹${discount.toLocaleString('en-IN')}`);
     } else if (code === 'TEQQNOBULK') {
-      const discount = 500;
-      setCouponDiscount(discount);
-      setCouponMessage(`Bulk voucher applied! Saved ₹500`);
+      const discount = Math.min(subtotal, 500);
+      setAppliedCode('TEQQNOBULK');
+      setCouponCode('TEQQNOBULK');
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', 'TEQQNOBULK');
+      } catch {}
+      setCouponMessage(`Bulk voucher applied! Saved ₹${discount.toLocaleString('en-IN')}`);
     } else {
       setCouponMessage('Invalid code. Try "WELCOME10" or "TEQQNO10"');
     }
+  };
+
+  const handleApplyCoupon = (e: React.FormEvent) => {
+    e.preventDefault();
+    applyCodeValue(couponCode);
   };
 
   const progressPercent = Math.min(100, Math.round((subtotal / freeShippingThreshold) * 100));
@@ -261,28 +288,44 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           {items.length > 0 && (
             <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] border-t border-[#E5E5EA] bg-[#FAF9FD] space-y-4">
               
-              {/* Promo code input */}
-              <form onSubmit={handleApplyCoupon} className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Voucher (e.g. WELCOME10)"
-                  value={couponCode}
-                  onChange={(e) => setCouponCode(e.target.value)}
-                  className="flex-1 border border-zinc-300 rounded-lg px-3 py-1.5 text-xs uppercase font-mono outline-none focus:border-[#FF7A00]"
-                />
-                <button
-                  type="submit"
-                  className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                >
-                  Apply
-                </button>
-              </form>
+              {/* Promo code input + New Customer WELCOME10 1-click pill */}
+              <div className="space-y-2">
+                <form onSubmit={handleApplyCoupon} className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Voucher (e.g. WELCOME10)"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value)}
+                    className="flex-1 border border-zinc-300 rounded-lg px-3 py-1.5 text-xs uppercase font-mono outline-none focus:border-[#FF7A00] bg-white"
+                  />
+                  <button
+                    type="submit"
+                    className="bg-[#0B0B0D] hover:bg-zinc-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Apply
+                  </button>
+                </form>
 
-              {couponMessage && (
-                <div className="text-[11px] text-zinc-600 font-medium">
-                  {couponMessage}
-                </div>
-              )}
+                {!appliedCode && (
+                  <button
+                    type="button"
+                    onClick={() => applyCodeValue('WELCOME10')}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-[#17171C] text-white border border-[#FF7A00]/45 text-[11px] hover:border-[#FF7A00] transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Tag className="w-3 h-3 text-[#FF7A00]" />
+                      <span>New Customer? Tap for <strong>10% OFF</strong></span>
+                    </span>
+                    <span className="font-mono font-bold text-[#FFD700]">WELCOME10 →</span>
+                  </button>
+                )}
+
+                {couponMessage && (
+                  <div className="text-[11px] text-emerald-700 font-medium">
+                    {couponMessage}
+                  </div>
+                )}
+              </div>
 
               {/* Price Breakdown */}
               <div className="space-y-1.5 text-xs text-zinc-600">
