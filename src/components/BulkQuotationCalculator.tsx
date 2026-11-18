@@ -147,34 +147,44 @@ export const BulkQuotationCalculator: React.FC<BulkQuotationCalculatorProps> = (
   }, [selectedProduct, quantity, pricing, selectedPrintMethod, selectedColor, selectedSize, companyName, contactPerson, gstin, quotationNumber, includePolybag, includeExpressDispatch]);
 
   return (
-    <div className={`bg-white rounded-2xl sm:rounded-3xl border border-zinc-200/90 shadow-2xl overflow-hidden w-full ${isModal ? 'max-w-5xl mx-auto my-auto max-h-[92vh] sm:max-h-[88vh] flex flex-col' : 'max-w-7xl mx-auto my-4 sm:my-8'}`}>
+    <div className={`bg-white rounded-2xl sm:rounded-3xl border border-slate-200/90 shadow-[0_28px_70px_-15px_rgba(7,27,53,0.38)] overflow-hidden w-full animate-admin-scale-in ${isModal ? 'max-w-5xl mx-auto my-auto max-h-[92vh] sm:max-h-[88vh] flex flex-col' : 'max-w-7xl mx-auto my-4 sm:my-8'}`}>
       
       {/* Header Banner */}
-      <div className="bg-[#0B0B0D] text-white p-4 sm:p-6 lg:p-7 relative shrink-0">
+      <div className="relative overflow-hidden bg-gradient-to-r from-[#071B35] via-[#0C264A] to-[#071B35] text-white p-5 sm:p-6 lg:p-7 shrink-0 border-b border-white/10">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-20 -right-14 w-80 h-80 rounded-full opacity-35 blur-3xl"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(255,121,0,0.55) 0%, transparent 70%)',
+          }}
+        />
         {isModal && onCloseModal && (
           <button
+            type="button"
             onClick={onCloseModal}
-            className="absolute top-4 sm:top-6 right-4 sm:right-6 text-zinc-400 hover:text-white p-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 transition-colors"
+            aria-label="Close Quotation Calculator"
+            className="relative z-20 float-right text-slate-300 hover:text-white p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 transition-all cursor-pointer group"
             title="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5 group-hover:rotate-90 transition-transform duration-200" />
           </button>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 mb-2 pr-8 sm:pr-0">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF7A00]/20 border border-[#FF7A00]/40 text-[#FF7A00] text-xs font-mono font-bold tracking-wider uppercase">
-            <Calculator className="w-3.5 h-3.5" />
+        <div className="relative z-10 flex flex-wrap items-center gap-2 mb-2.5 pr-10 sm:pr-0">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF7900]/15 border border-[#FF7900]/45 text-[#FF9E44] text-[11px] font-mono font-bold tracking-wider uppercase">
+            <Calculator className="w-3.5 h-3.5 text-[#FF7900]" />
             <span>Direct Factory B2B Quotation Engine</span>
           </span>
-          <span className="text-xs font-mono text-zinc-400">
-            SAC Code: 9989 · 100% ITC Eligible
+          <span className="text-[11px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-400/25 px-2.5 py-0.5 rounded-full">
+            SAC 9989 · 100% ITC Eligible
           </span>
         </div>
 
-        <h2 className="font-display text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-white">
-          Instant Bulk Order Quotation & Estimator
+        <h2 className="relative z-10 font-display text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-white">
+          Instant Bulk Order Quotation &amp; Estimator
         </h2>
-        <p className="text-zinc-400 text-xs sm:text-sm mt-1 max-w-2xl leading-relaxed">
+        <p className="relative z-10 text-slate-300 text-xs sm:text-sm mt-1 max-w-2xl leading-relaxed">
           Live tiered manufacturing prices directly calibrated from our factory floor. Download official PDF proposals or submit for immediate pre-press proofing.
         </p>
       </div>
@@ -443,18 +453,18 @@ export const BulkQuotationCalculator: React.FC<BulkQuotationCalculatorProps> = (
 
         {/* Right Column: Live Quotation Summary Card (5 Cols) */}
         <div className="lg:col-span-5 space-y-5">
-          <div className="bg-[#FAF9FD] rounded-2xl border border-zinc-200/90 p-6 space-y-6 shadow-sm">
+          <div className="bg-gradient-to-b from-[#F8FAFC] to-white rounded-2xl border border-slate-200/90 p-6 space-y-6 shadow-md">
             
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
+            <div className="flex items-center justify-between pb-3.5 border-b border-slate-200">
               <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-slate-500">
                   REF #{quotationNumber}
                 </span>
-                <h3 className="font-display font-bold text-lg text-[#0B0B0D]">
+                <h3 className="font-display font-bold text-lg text-[#071B35]">
                   Estimated Price Summary
                 </h3>
               </div>
-              <span className="text-[11px] font-semibold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-300">
+              <span className="text-[11px] font-semibold bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-200">
                 15-Day Price Lock
               </span>
             </div>

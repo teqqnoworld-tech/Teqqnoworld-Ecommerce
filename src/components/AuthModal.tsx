@@ -289,44 +289,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto animate-fade-in">
-      <div 
-        className="relative w-full max-w-lg bg-[#0F1014] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden my-8"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#071B35]/80 backdrop-blur-md overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-lg bg-[#091830] border border-white/15 rounded-3xl shadow-[0_30px_80px_-15px_rgba(4,12,28,0.85)] overflow-hidden my-8 animate-admin-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Header Banner */}
-        <div className="bg-gradient-to-r from-zinc-900 via-zinc-900/90 to-[#18191E] p-6 border-b border-zinc-800/80 relative">
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#071B35] via-[#0D274A] to-[#081A33] p-6 border-b border-white/10">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -top-16 -right-12 w-64 h-64 rounded-full opacity-35 blur-3xl"
+            style={{
+              background:
+                'radial-gradient(circle, rgba(255,121,0,0.55) 0%, transparent 70%)',
+            }}
+          />
           <button
+            type="button"
             onClick={onClose}
-            className="absolute top-5 right-5 p-2 rounded-xl bg-zinc-800/60 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+            className="relative z-20 float-right p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-slate-300 hover:text-white transition-all cursor-pointer group"
             aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5 group-hover:rotate-90 transition-transform duration-200" />
           </button>
 
-          <div className="flex items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-[#FF7A00]/15 text-[#FF7A00] border border-[#FF7A00]/30">
-              <Sparkles className="w-3 h-3" />
+          <div className="relative z-10 flex items-center gap-2 mb-2.5">
+            <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-[#FF7900]/15 text-[#FF9E44] border border-[#FF7900]/40">
+              <Sparkles className="w-3 h-3 text-[#FF7900]" />
               B2B CORPORATE PORTAL
             </span>
           </div>
 
-          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+          <h2 className="relative z-10 font-display text-xl sm:text-2xl font-bold text-white tracking-tight">
             {tab === 'login' ? 'Welcome Back' : 'Create Business Account'}
           </h2>
-          <p className="text-xs sm:text-sm text-zinc-400 mt-1">
+          <p className="relative z-10 text-xs sm:text-sm text-slate-300 mt-1">
             {destinationActionNote || 'Access custom pricing, GST tax invoices & instant mockups.'}
           </p>
 
           {/* DUAL TAB SWITCHER */}
-          <div className="grid grid-cols-2 p-1 mt-5 bg-zinc-950/70 border border-zinc-800 rounded-xl">
+          <div className="relative z-10 grid grid-cols-2 p-1 mt-5 bg-[#051224]/80 border border-white/10 rounded-xl">
             <button
               type="button"
               onClick={() => { setTab('login'); setLoginError(''); }}
               className={`py-2 text-xs font-semibold rounded-lg transition-all duration-200 cursor-pointer ${
                 tab === 'login'
-                  ? 'bg-[#FF7A00] text-white shadow-md shadow-[#FF7A00]/20'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+                  ? 'bg-[#FF7900] text-white shadow-md shadow-[#FF7900]/25'
+                  : 'text-slate-300 hover:text-white hover:bg-white/5'
               }`}
             >
               Sign In
@@ -336,8 +348,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               onClick={() => { setTab('register'); setRegError(''); }}
               className={`py-2 text-xs font-semibold rounded-lg transition-all duration-200 cursor-pointer ${
                 tab === 'register'
-                  ? 'bg-[#FF7A00] text-white shadow-md shadow-[#FF7A00]/20'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+                  ? 'bg-[#FF7900] text-white shadow-md shadow-[#FF7900]/25'
+                  : 'text-slate-300 hover:text-white hover:bg-white/5'
               }`}
             >
               Register (New Account)

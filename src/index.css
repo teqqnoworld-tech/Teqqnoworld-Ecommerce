@@ -636,6 +636,61 @@ button:active svg.lucide {
   animation: portal-area-draw 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* ==========================================================================
+   DELHIVERY LIVE TRACKER ANIMATIONS
+   ========================================================================== */
+
+@keyframes tracking-truck-cruise {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  25% {
+    transform: translate3d(2.5px, -1px, 0);
+  }
+  50% {
+    transform: translate3d(5px, 0, 0);
+  }
+  75% {
+    transform: translate3d(2.5px, -0.75px, 0);
+  }
+}
+
+@keyframes tracking-route-shimmer {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(220%, 0, 0);
+  }
+}
+
+@keyframes tracking-pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+.animate-tracking-truck {
+  animation: tracking-truck-cruise 2.4s ease-in-out infinite;
+}
+
+.animate-tracking-shimmer {
+  animation: tracking-route-shimmer 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-tracking-ring {
+  animation: tracking-pulse-ring 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+}
+
 /* Accessibility: Respect Reduced Motion */
 @media (prefers-reduced-motion: reduce) {
   svg.lucide,
@@ -666,7 +721,10 @@ button:active svg.lucide {
   .animate-admin-sparkline,
   .animate-portal-glow,
   .animate-portal-donut,
-  .animate-portal-area {
+  .animate-portal-area,
+  .animate-tracking-truck,
+  .animate-tracking-shimmer,
+  .animate-tracking-ring {
     animation: none !important;
     transition: none !important;
     transform: none !important;

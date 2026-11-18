@@ -891,16 +891,26 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#071B35] via-[#0B2547] to-[#071B35] flex flex-col justify-center items-center p-4">
         <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-6 animate-admin-scale-in">
-          <div className="text-center space-y-2">
-            <div className="w-16 h-16 rounded-2xl bg-[#FFF4EB] border border-[#FFD8B8] text-[#FF7900] flex items-center justify-center mx-auto shadow-sm">
-              <Lock className="w-7 h-7" />
+          <div className="text-center space-y-3">
+            <div className="relative inline-flex items-center justify-center mx-auto">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#071B35] to-[#0D274A] border border-[#FF7900]/30 text-[#FF7900] flex items-center justify-center shadow-lg shadow-[#071B35]/20">
+                <Lock className="w-7 h-7" />
+              </div>
+              <img
+                src={LOGO_BADGE_SRC}
+                alt="TeqqnoWorld"
+                className="w-7 h-7 rounded-lg object-contain bg-white border border-slate-200 shadow-sm p-0.5 -bottom-1.5 -right-1.5 absolute"
+              />
             </div>
-            <p className="text-xs font-semibold text-[#FF7900]">Business Owner Access</p>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF4EB] border border-[#FFD8B8] text-[11px] font-semibold text-[#FF7900]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#FF7900] animate-pulse" />
+              <span>Business Owner Access</span>
+            </div>
             <h1 className="font-display font-bold text-2xl tracking-tight text-[#071B35]">
               TeqqnoWorld Operations Hub
             </h1>
-            <p className="text-xs text-slate-500">
-              Enter your 4-digit security PIN to manage orders, Delhivery shipments, and payments.
+            <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">
+              Enter your 4-digit security PIN to manage orders, Delhivery shipments, and Razorpay settlements.
             </p>
           </div>
 

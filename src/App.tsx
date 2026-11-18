@@ -176,7 +176,22 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem('teqqno_orders');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: Order[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((o) => ({
+            ...o,
+            courierPartner:
+              o.courierPartner && /bluedart|blue\s*dart/i.test(o.courierPartner)
+                ? 'Delhivery Express'
+                : o.courierPartner,
+            trackingNumber:
+              o.trackingNumber === 'BD-AIR-8920194812'
+                ? 'DLV-EXP-8920194812'
+                : o.trackingNumber,
+          }));
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -801,7 +816,7 @@ export default function App() {
               </div>
               <h2 className="text-xl font-bold font-display text-zinc-900">Sign in to Access Corporate Dashboard</h2>
               <p className="text-xs text-zinc-500">
-                Enter your mobile number to view Pantone proofs, live BlueDart tracking, and 18% ITC GST invoices.
+                Enter your mobile number to view Pantone proofs, live Delhivery tracking, and 18% ITC GST invoices.
               </p>
               <button
                 onClick={() => {

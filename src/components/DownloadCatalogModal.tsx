@@ -112,121 +112,140 @@ export const DownloadCatalogModal: React.FC<DownloadCatalogModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl p-6 sm:p-8 space-y-6 my-8 max-h-[90vh] overflow-y-auto">
-        
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-200">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#FF7A00] bg-[#FF7A00]/10 px-2.5 py-0.5 rounded-full">
-                Enterprise Procurement Library
-              </span>
-              <span className="text-xs text-zinc-400 font-mono">Updated October 2026</span>
+    <div
+      className="fixed inset-0 z-50 bg-[#071B35]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl max-w-4xl w-full border border-slate-200/80 shadow-[0_28px_70px_-15px_rgba(7,27,53,0.4)] overflow-hidden my-6 max-h-[90vh] flex flex-col animate-admin-scale-in"
+      >
+        {/* Top Navy Header */}
+        <div className="relative overflow-hidden bg-gradient-to-r from-[#071B35] via-[#0B2347] to-[#071B35] text-white px-5 sm:px-7 py-5 sm:py-6 shrink-0 border-b border-white/10">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -top-16 -right-10 w-72 h-72 rounded-full opacity-35 blur-3xl"
+            style={{
+              background:
+                'radial-gradient(circle, rgba(255,121,0,0.55) 0%, transparent 70%)',
+            }}
+          />
+          <div className="relative z-10 flex items-start justify-between gap-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#FF9E44] bg-[#FF7900]/15 border border-[#FF7900]/40 px-2.5 py-0.5 rounded-full">
+                  Enterprise Procurement Library
+                </span>
+                <span className="text-[11px] text-slate-300 font-mono">Updated October 2026</span>
+              </div>
+              <h2 className="font-display text-xl sm:text-2xl font-bold text-white mt-2 tracking-tight">
+                Download Official Corporate Catalogues &amp; Spec Sheets
+              </h2>
             </div>
-            <h2 className="font-display text-2xl font-bold text-[#0B0B0D] mt-1">
-              Download Official Corporate Catalogues & Spec Sheets
-            </h2>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close catalogues modal"
+              className="text-slate-300 hover:text-white p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 transition-all cursor-pointer group shrink-0"
+            >
+              <X className="w-5 h-5 group-hover:rotate-90 transition-transform duration-200" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-800 p-2 rounded-xl hover:bg-zinc-100 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
         </div>
 
-        {/* Catalog Cards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {CATALOG_ITEMS.map((item) => {
-            const isDownloading = downloadingId === item.id;
-            const isSuccess = downloadSuccessId === item.id;
-            return (
-              <div
-                key={item.id}
-                className="p-5 rounded-2xl border border-zinc-200/90 hover:border-zinc-300 transition-all bg-zinc-50/50 flex flex-col justify-between space-y-4 group"
-              >
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#0B0B0D] text-white">
-                      {item.badge}
-                    </span>
-                    <span className="text-[11px] font-mono text-zinc-500">
-                      {item.pages} Pages · {item.fileSize}
-                    </span>
+        <div className="p-5 sm:p-7 space-y-6 overflow-y-auto flex-1 bg-[#F8FAFC]">
+          {/* Catalog Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {CATALOG_ITEMS.map((item) => {
+              const isDownloading = downloadingId === item.id;
+              const isSuccess = downloadSuccessId === item.id;
+              return (
+                <div
+                  key={item.id}
+                  className="p-5 rounded-2xl border border-slate-200/90 hover:border-[#FF7900]/50 hover:shadow-md transition-all bg-white flex flex-col justify-between space-y-4 group"
+                >
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-[#071B35] text-white">
+                        {item.badge}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {item.pages} Pages · {item.fileSize}
+                      </span>
+                    </div>
+
+                    <h3 className="font-display font-bold text-sm text-[#071B35] group-hover:text-[#FF7900] transition-colors">
+                      {item.title}
+                    </h3>
+
+                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                      {item.description}
+                    </p>
                   </div>
 
-                  <h3 className="font-display font-bold text-sm text-[#0B0B0D] group-hover:text-[#FF7A00] transition-colors">
-                    {item.title}
-                  </h3>
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {item.category}
+                    </span>
 
-                  <p className="text-xs text-zinc-600 line-clamp-3">
-                    {item.description}
-                  </p>
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(item)}
+                      disabled={isDownloading}
+                      className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer min-h-[38px] ${
+                        isSuccess
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'bg-[#071B35] hover:bg-[#FF7900] text-white shadow-xs'
+                      }`}
+                    >
+                      {isSuccess ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Downloaded!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5 text-[#FF7900] group-hover:text-white transition-colors" />
+                          <span>{isDownloading ? 'Preparing...' : 'Download PDF'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-
-                <div className="pt-2 border-t border-zinc-200 flex items-center justify-between gap-3">
-                  <span className="text-[11px] text-zinc-400 font-mono">
-                    {item.category}
-                  </span>
-
-                  <button
-                    onClick={() => handleDownload(item)}
-                    disabled={isDownloading}
-                    className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                      isSuccess
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-[#0B0B0D] hover:bg-zinc-800 text-white'
-                    }`}
-                  >
-                    {isSuccess ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Downloaded!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-3.5 h-3.5 text-[#FF7A00]" />
-                        <span>{isDownloading ? 'Preparing...' : 'Download PDF'}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Email Full Catalog Suite */}
-        <div className="p-5 rounded-2xl bg-[#0B0B0D] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h4 className="font-display font-bold text-sm text-white flex items-center gap-1.5">
-              <Mail className="w-4 h-4 text-[#FF7A00]" />
-              <span>Email All Catalogues to Procurement Team</span>
-            </h4>
-            <p className="text-xs text-zinc-400">
-              Receive all 4 high-resolution PDFs directly into your corporate inbox.
-            </p>
+              );
+            })}
           </div>
 
-          <form onSubmit={handleSendEmail} className="flex items-center gap-2">
-            <input
-              type="email"
-              placeholder="company@domain.com"
-              value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
-              className="px-3 py-2 text-xs rounded-xl bg-zinc-900 border border-zinc-700 text-white placeholder-zinc-500 outline-none focus:border-[#FF7A00] min-w-[200px]"
-              required
-            />
-            <button
-              type="submit"
-              className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap cursor-pointer"
-            >
-              {emailSent ? 'Sent to Inbox!' : 'Send All'}
-            </button>
-          </form>
-        </div>
+          {/* Email Full Catalog Suite */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-[#071B35] to-[#0D274A] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-white/10 shadow-lg">
+            <div className="space-y-1">
+              <h4 className="font-display font-bold text-sm text-white flex items-center gap-1.5">
+                <Mail className="w-4 h-4 text-[#FF7900]" />
+                <span>Email All Catalogues to Procurement Team</span>
+              </h4>
+              <p className="text-xs text-slate-300">
+                Receive all 4 high-resolution PDFs directly into your corporate inbox.
+              </p>
+            </div>
 
+            <form onSubmit={handleSendEmail} className="flex items-center gap-2">
+              <input
+                type="email"
+                placeholder="company@domain.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                className="px-3.5 py-2 text-xs rounded-xl bg-white/10 border border-white/15 text-white placeholder-slate-400 outline-none focus:border-[#FF7900] min-w-[200px] min-h-[40px]"
+                required
+              />
+              <button
+                type="submit"
+                className="bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap cursor-pointer min-h-[40px] shadow-md shadow-[#FF7900]/25"
+              >
+                {emailSent ? 'Sent to Inbox!' : 'Send All'}
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   );

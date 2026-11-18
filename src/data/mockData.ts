@@ -1101,7 +1101,7 @@ export const FAQ_LIST = [
   {
     num: '03',
     q: 'What is the typical production and delivery turnaround time?',
-    a: 'Standard catalog lines (polos, round-neck tees, caps, and visiting cards) are manufactured and dispatched in 24–48 hours from digital proof approval. Air delivery to Mumbai, Bengaluru, Delhi-NCR, Hyderabad, and Pune arrives within 24–48 hours via BlueDart Air. Customized gift hampers take 3–5 working days.',
+    a: 'Standard catalog lines (polos, round-neck tees, caps, and visiting cards) are manufactured and dispatched in 24–48 hours from digital proof approval. Air delivery to Mumbai, Bengaluru, Delhi-NCR, Hyderabad, and Pune arrives within 24–48 hours via Delhivery Express. Customized gift hampers take 3–5 working days.',
   },
   {
     num: '04',
@@ -1176,8 +1176,8 @@ export const INITIAL_MOCK_ORDER: Order = {
   proofStatus: 'Proof Ready - Needs Approval',
   orderStatus: 'Artwork Verification',
   estimatedDispatch: '2026-10-26',
-  trackingNumber: 'BD-AIR-8920194812',
-  courierPartner: 'BlueDart Apex Express',
+  trackingNumber: 'DLV-EXP-8920194812',
+  courierPartner: 'Delhivery Express',
   paymentMode: 'Test Gateway (Pre-Integration)',
   paymentStatus: 'Test Authenticated (Sandbox)'
 };
@@ -1364,8 +1364,8 @@ export const MOCK_NOTIFICATIONS: NotificationItem[] = [
   },
   {
     id: 'notif-2',
-    title: 'BlueDart Tracking AWB Generated',
-    message: 'Consignment AWB #BD-AIR-8920194812 created for your order. Expected dispatch within 24 hours.',
+    title: 'Delhivery Tracking AWB Generated',
+    message: 'Consignment AWB #DLV-EXP-8920194812 created for your order. Expected dispatch within 24 hours.',
     timestamp: '5 hours ago',
     read: false,
     type: 'order',
