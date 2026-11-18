@@ -64,6 +64,7 @@ export interface ParsedOrderNotes {
   frontMockupUrl: string | null;
   backMockupUrl: string | null;
   backLogoUrl: string | null;
+  voiceNoteUrl: string | null;
   color: string | null;
   size: string | null;
   method: string | null;
@@ -92,10 +93,11 @@ export function parseOrderNotes(notes?: string | null): ParsedOrderNotes {
   const frontMockupMatch = raw.match(/\[FrontMockup:\s*(https?:\/\/[^\s\]]+|data:image\/[^\s\]]+)\]/i);
   const backMockupMatch = raw.match(/\[BackMockup:\s*(https?:\/\/[^\s\]]+|data:image\/[^\s\]]+)\]/i);
   const backLogoMatch = raw.match(/\[BackLogo:\s*(https?:\/\/[^\s\]]+|data:image\/[^\s\]]+)\]/i);
+  const voiceNoteMatch = raw.match(/\[VoiceNote:\s*(https?:\/\/[^\s\]]+|data:audio\/[^\s\]]+)\]/i);
 
   const cleanNotes = raw
-    .replace(/\|\s*\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
-    .replace(/\[(FrontMockup|BackMockup|BackLogo):[^\]]+\]/gi, '')
+    .replace(/\|\s*\[(FrontMockup|BackMockup|BackLogo|VoiceNote):[^\]]+\]/gi, '')
+    .replace(/\[(FrontMockup|BackMockup|BackLogo|VoiceNote):[^\]]+\]/gi, '')
     .trim();
 
   const extractField = (prefixRegex: RegExp): string | null => {
@@ -146,6 +148,7 @@ export function parseOrderNotes(notes?: string | null): ParsedOrderNotes {
     frontMockupUrl: frontMockupMatch?.[1] || null,
     backMockupUrl: backMockupMatch?.[1] || null,
     backLogoUrl: backLogoMatch?.[1] || null,
+    voiceNoteUrl: voiceNoteMatch?.[1] || null,
     color,
     size,
     method,

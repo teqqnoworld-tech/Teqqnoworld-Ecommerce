@@ -5,8 +5,10 @@ import {
 } from 'lucide-react';
 import { useRequestQuote } from '../hooks/useSupabase';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { uploadDataUrlToStorage } from '../services/supabaseService';
 import { PRODUCTS } from '../data/mockData';
 import { compressImageFile } from '../utils/imageCompressor';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 
 interface RequestQuoteModalProps {
   isOpen: boolean;
@@ -42,10 +44,11 @@ export const RequestQuoteModal: React.FC<RequestQuoteModalProps> = ({
       : ''
   );
   
-  // File upload state
+  // File & voice note state
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(prefilledLogoUrl || null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [voiceNoteUrl, setVoiceNoteUrl] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -82,6 +85,19 @@ export const RequestQuoteModal: React.FC<RequestQuoteModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    let uploadedVoiceUrl: string | null = voiceNoteUrl;
+    if (voiceNoteUrl && voiceNoteUrl.startsWith('data:') && isSupabaseConfigured()) {
+      const storageUrl = await uploadDataUrlToStorage(voiceNoteUrl, 'modal_rfq_voice').catch(() => null);
+      if (storageUrl) uploadedVoiceUrl = storageUrl;
+    }
+
+    const combinedNotes = [
+      customNotes.trim(),
+      uploadedVoiceUrl ? `[VoiceNote: ${uploadedVoiceUrl}]` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
     const res = await submitQuote({
       customerName,
       customerEmail,
@@ -89,7 +105,7 @@ export const RequestQuoteModal: React.FC<RequestQuoteModalProps> = ({
       phone,
       productId,
       quantity,
-      customNotes,
+      customNotes: combinedNotes,
       logoFile,
       existingLogoUrl: !logoFile && prefilledLogoUrl ? prefilledLogoUrl : undefined,
     });
@@ -369,6 +385,18 @@ export const RequestQuoteModal: React.FC<RequestQuoteModalProps> = ({
                 </label>
               </div>
             </div>
+
+            {/* Voice Instructions */}
+            <VoiceInstructionsCard
+              voiceNoteUrl={voiceNoteUrl}
+              onVoiceNoteChange={setVoiceNoteUrl}
+              textNotes={customNotes}
+              onTextNotesChange={setCustomNotes}
+              title="Record Voice Instructions"
+              subtitle="Dictate in EN/HI or attach an audio note alongside your RFQ"
+              hideTextArea
+              compact
+            />
 
             {/* Custom Notes */}
             <div>

@@ -132,9 +132,12 @@ export async function uploadBrandLogoToStorage(
   let cleanName = (fileName || (file instanceof File ? file.name : 'logo.webp')).replace(/[^a-zA-Z0-9._-]/g, '_').toLowerCase();
 
   try {
+    const isAudio = (file.type && file.type.startsWith('audio/')) || /\.(webm|mp3|wav|m4a|ogg)$/i.test(cleanName);
     const isSvg = (file.type && file.type.includes('svg')) || cleanName.endsWith('.svg');
     const isPdf = (file.type && file.type.includes('pdf')) || cleanName.endsWith('.pdf');
-    if (isPdf) {
+    if (isAudio) {
+      targetContentType = (file.type && file.type.split(';')[0]) || 'audio/webm';
+    } else if (isPdf) {
       targetContentType = 'application/pdf';
     } else if (isSvg) {
       targetContentType = 'image/svg+xml';
@@ -208,15 +211,18 @@ export async function uploadDataUrlToStorage(
   }
 
   try {
-    // Compress dataUrl using canvas prior to storage upload
-    const optimizedDataUrl = await compressDataUrl(dataUrl, {
-      maxWidth: 1200,
-      maxHeight: 1200,
-      quality: 0.8,
-      format: 'image/webp',
-    });
+    const isAudioDataUrl = dataUrl.startsWith('data:audio/');
+    // Compress raster image dataUrls using canvas prior to storage upload; skip compression for audio
+    const optimizedDataUrl = isAudioDataUrl
+      ? dataUrl
+      : await compressDataUrl(dataUrl, {
+          maxWidth: 1200,
+          maxHeight: 1200,
+          quality: 0.8,
+          format: 'image/webp',
+        });
 
-    const match = optimizedDataUrl.match(/^data:([a-zA-Z0-9/+-]+);base64,(.+)$/);
+    const match = optimizedDataUrl.match(/^data:([a-zA-Z0-9/+.-]+)(?:;[^,]*)?;base64,(.+)$/);
     if (!match) {
       return null;
     }
@@ -231,11 +237,12 @@ export async function uploadDataUrlToStorage(
     const byteArray = new Uint8Array(byteNumbers);
     const blob = new Blob([byteArray], { type: mimeType });
 
-    const ext = mimeType.split('/')[1]?.replace('svg+xml', 'svg') || 'webp';
+    const rawSubtype = mimeType.split('/')[1]?.replace('svg+xml', 'svg') || (isAudioDataUrl ? 'webm' : 'webp');
+    const ext = rawSubtype === 'mpeg' ? 'mp3' : rawSubtype === 'x-m4a' ? 'm4a' : rawSubtype;
     const cleanExt = ext.replace(/[^a-zA-Z0-9]/g, '');
-    const filename = fallbackName 
-      ? `${fallbackName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}.${cleanExt}` 
-      : `logo_${Date.now()}.${cleanExt}`;
+    const filename = fallbackName
+      ? `${fallbackName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}.${cleanExt}`
+      : `${isAudioDataUrl ? 'voice_note' : 'logo'}_${Date.now()}.${cleanExt}`;
 
     const { publicUrl } = await uploadBrandLogoToStorage(blob, filename);
     return publicUrl;

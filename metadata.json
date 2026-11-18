@@ -1,7 +1,7 @@
 {
   "name": "Remix Remix Remix Remix Remix Remix Remix Remix Remix Remix TeqqnoWorld Custom E-Commerce",
   "description": "High-performance custom printing and corporate merchandise platform with live 2D logo preview studio, tiered bulk pricing, and corporate RFQ.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

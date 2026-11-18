@@ -230,6 +230,18 @@ export const OrderDetailDrawer: React.FC<{
                       Note: {item.customNotes}
                     </p>
                   )}
+                  {(item.voiceNoteUrl || order.orderVoiceNoteUrl) && (
+                    <div className="mt-2 bg-emerald-50/80 border border-emerald-200 rounded-lg p-2 space-y-1">
+                      <div className="text-[10px] font-semibold text-emerald-700">
+                        🎙️ Voice Instructions
+                      </div>
+                      <audio
+                        controls
+                        src={item.voiceNoteUrl || order.orderVoiceNoteUrl}
+                        className="w-full h-8 rounded-md"
+                      />
+                    </div>
+                  )}
                   <div className="mt-2 flex items-center justify-between text-xs font-bold text-[#0B1530] tabular-nums">
                     <span className="text-slate-500 font-medium">
                       ₹{item.unitPrice.toLocaleString('en-IN')}/pc

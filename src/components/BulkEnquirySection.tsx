@@ -8,8 +8,10 @@ import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { useRequestQuote } from '../hooks/useSupabase';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { uploadDataUrlToStorage } from '../services/supabaseService';
 import { PRODUCTS } from '../data/mockData';
 import { compressImageFile } from '../utils/imageCompressor';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 
 interface BulkEnquirySectionProps {
   prefilledItemName?: string;
@@ -31,6 +33,7 @@ export const BulkEnquirySection: React.FC<BulkEnquirySectionProps> = ({
   const [selectedProductId, setSelectedProductId] = useState(PRODUCTS[0].id);
   const [quantity, setQuantity] = useState(prefilledQty);
   const [customNotes, setCustomNotes] = useState(prefilledItemName || '');
+  const [voiceNoteUrl, setVoiceNoteUrl] = useState<string | null>(null);
   
   // Brand logo file state
   const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -70,6 +73,19 @@ export const BulkEnquirySection: React.FC<BulkEnquirySectionProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    let uploadedVoiceUrl: string | null = voiceNoteUrl;
+    if (voiceNoteUrl && voiceNoteUrl.startsWith('data:') && isSupabaseConfigured()) {
+      const storageUrl = await uploadDataUrlToStorage(voiceNoteUrl, 'rfq_voice_note').catch(() => null);
+      if (storageUrl) uploadedVoiceUrl = storageUrl;
+    }
+
+    const combinedNotes = [
+      customNotes.trim(),
+      uploadedVoiceUrl ? `[VoiceNote: ${uploadedVoiceUrl}]` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
     const quoteRes = await submitQuote({
       customerName: customerName || 'Corporate Client',
       customerEmail: email,
@@ -77,7 +93,7 @@ export const BulkEnquirySection: React.FC<BulkEnquirySectionProps> = ({
       phone,
       productId: selectedProductId,
       quantity,
-      customNotes,
+      customNotes: combinedNotes,
       logoFile,
     });
 
@@ -406,6 +422,19 @@ export const BulkEnquirySection: React.FC<BulkEnquirySectionProps> = ({
                       ))}
                     </div>
                   </div>
+
+                  {/* Voice Instructions & Notes */}
+                  <VoiceInstructionsCard
+                    voiceNoteUrl={voiceNoteUrl}
+                    onVoiceNoteChange={setVoiceNoteUrl}
+                    textNotes={customNotes}
+                    onTextNotesChange={setCustomNotes}
+                    title="Voice Instructions for RFQ"
+                    subtitle="Speak your quantity, printing or deadline requirements"
+                    notesLabel="Requirement Notes (EN/HI Voice-to-Text supported):"
+                    notesPlaceholder="e.g. Need 300 polo T-shirts with embroidered logo by next Friday."
+                    compact
+                  />
 
                   {/* Submit Button */}
                   <div className="pt-1">

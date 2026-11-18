@@ -179,6 +179,7 @@ export function mapSupabaseRowToOrder(row: CustomOrderRow): Order {
         previewUrl: parsed.frontMockupUrl || undefined,
         backPreviewUrl: parsed.backMockupUrl || undefined,
         customNotes: parsed.customNotesText || undefined,
+        voiceNoteUrl: parsed.voiceNoteUrl || undefined,
         artwork: row.logo_url
           ? {
               type: 'image',

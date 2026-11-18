@@ -19,6 +19,7 @@ import {
   X
 } from 'lucide-react';
 import { NewCustomerPromoBanner } from './NewCustomerPromoBanner';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 import { CartItem, ShippingAddress, Order, UserProfile } from '../types';
 import { supabase } from '../lib/supabase';
 import { 
@@ -104,6 +105,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [uploadStepStatus, setUploadStepStatus] = useState<string>('');
+  const [orderVoiceNoteUrl, setOrderVoiceNoteUrl] = useState<string | null>(null);
+  const [orderVoiceNotes, setOrderVoiceNotes] = useState<string>('');
 
   // New Customer 10% OFF Promo Code State (synced with CartDrawer session)
   const [promoInput, setPromoInput] = useState<string>(() => {
@@ -426,17 +429,23 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
         const slugBase = `${item.product.id}_${item.color?.name || 'custom'}`.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-        const [frontLogoRes, backLogoRes, frontMockupRes, backMockupRes, ...extraLogoResList] = await Promise.all([
+        // Upload order-level voice note once if provided, otherwise item-level voice note
+        const effectiveVoiceSource = item.voiceNoteUrl || orderVoiceNoteUrl || null;
+        const [frontLogoRes, backLogoRes, frontMockupRes, backMockupRes, voiceNoteRes, ...extraLogoResList] = await Promise.all([
           safeUploadToSupabase(frontRawLogo, `${slugBase}_logo_front`),
           safeUploadToSupabase(backRawLogo, `${slugBase}_logo_back`),
           safeUploadToSupabase(frontMockupDataUrl, `${slugBase}_mockup_front`),
           safeUploadToSupabase(backMockupDataUrl, `${slugBase}_mockup_back`),
+          safeUploadToSupabase(effectiveVoiceSource, `${slugBase}_voice_note`),
           ...extraRawLogos.slice(0, 4).map((extraSrc, idx) =>
             safeUploadToSupabase(extraSrc, `${slugBase}_extra_${idx + 1}`)
           ),
         ]);
 
         const primaryLogoDbUrl = frontLogoRes.publicUrl || backLogoRes.publicUrl || frontMockupRes.publicUrl || null;
+        const combinedItemNotes = [item.customNotes, orderVoiceNotes.trim()]
+          .filter(Boolean)
+          .join(' | Checkout Instruction: ');
 
         // Map form fields to exact Supabase custom_orders columns
         const notesParts: string[] = [];
@@ -444,7 +453,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         if (item.size) notesParts.push(`Size: ${item.size}`);
         if (item.printMethod) notesParts.push(`Method: ${item.printMethod}`);
         if (designPositionSummary) notesParts.push(`Position & Layout: ${designPositionSummary}`);
-        if (item.customNotes) notesParts.push(`Notes: ${item.customNotes}`);
+        if (combinedItemNotes) notesParts.push(`Notes: ${combinedItemNotes}`);
         if (poNumber) notesParts.push(`PO#: ${poNumber}`);
         if (isB2BInvoice && gstin) notesParts.push(`GSTIN: ${gstin}`);
         notesParts.push(`Address: ${street}, ${city}, ${state} - ${pincode}`);
@@ -463,6 +472,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         if (frontMockupRes.publicUrl) notesParts.push(`[FrontMockup: ${frontMockupRes.publicUrl}]`);
         if (backMockupRes.publicUrl) notesParts.push(`[BackMockup: ${backMockupRes.publicUrl}]`);
         if (backLogoRes.publicUrl) notesParts.push(`[BackLogo: ${backLogoRes.publicUrl}]`);
+        if (voiceNoteRes.publicUrl) notesParts.push(`[VoiceNote: ${voiceNoteRes.publicUrl}]`);
 
         const orderRow = {
           customer_name: fullName.trim(),
@@ -509,7 +519,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           mockupFrontUrl: frontMockupRes.emailSource,
           mockupBackUrl: backMockupRes.emailSource,
           extraArtworkUrls: extraLogoResList.map((r) => r.emailSource).filter((u): u is string => Boolean(u)),
-          customNotes: item.customNotes,
+          customNotes: combinedItemNotes || undefined,
+          voiceNoteUrl: voiceNoteRes.publicUrl || voiceNoteRes.emailSource,
           quantity: item.quantity,
           price: item.unitPrice,
           totalPrice: item.totalPrice,
@@ -561,6 +572,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         balanceDue,
         razorpayOrderId,
         razorpayPaymentId,
+        orderVoiceNoteUrl: orderVoiceNoteUrl || undefined,
+        orderNotes: orderVoiceNotes.trim() || undefined,
       };
 
       // CRO: Mark abandoned lead as recovered upon successful placement
@@ -586,6 +599,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         amountPaid: payableNow,
         balanceDue,
         razorpayPaymentId,
+        orderVoiceNoteUrl: orderVoiceNoteUrl || undefined,
+        orderNotes: orderVoiceNotes.trim() || undefined,
         items: emailItems,
         subtotal: discountedSubtotal,
         gstAmount,
@@ -1058,22 +1073,45 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               {/* Items Preview */}
               <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
                 {items.map((item) => (
-                  <div key={item.id} className="text-xs flex items-start justify-between gap-3 pb-3 border-b border-zinc-100">
-                    <div>
-                      <div className="font-semibold text-[#0B0B0D]">{item.product.name}</div>
-                      <div className="text-[11px] text-zinc-500">
-                        {item.quantity} pcs · {item.color.name} {item.size ? `· ${item.size}` : ''}
+                  <div key={item.id} className="text-xs pb-3 border-b border-zinc-100 space-y-1.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-[#0B0B0D]">{item.product.name}</div>
+                        <div className="text-[11px] text-zinc-500">
+                          {item.quantity} pcs · {item.color.name} {item.size ? `· ${item.size}` : ''}
+                        </div>
+                        <div className="text-[10px] text-[#FF7A00] font-mono">
+                          {item.printMethod} ({item.printPlacement})
+                        </div>
                       </div>
-                      <div className="text-[10px] text-[#FF7A00] font-mono">
-                        {item.printMethod} ({item.printPlacement})
+                      <div className="text-right font-mono font-bold text-zinc-800">
+                        ₹{(item.unitPrice * item.quantity).toLocaleString('en-IN')}
                       </div>
                     </div>
-                    <div className="text-right font-mono font-bold text-zinc-800">
-                      ₹{(item.unitPrice * item.quantity).toLocaleString('en-IN')}
-                    </div>
+                    {item.voiceNoteUrl && (
+                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2 space-y-1">
+                        <div className="text-[10px] text-emerald-700 font-semibold">
+                          🎙️ Attached Product Voice Note
+                        </div>
+                        <audio controls src={item.voiceNoteUrl} className="w-full h-8 rounded-md" />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
+
+              {/* Order-Level Voice Instructions */}
+              <VoiceInstructionsCard
+                voiceNoteUrl={orderVoiceNoteUrl}
+                onVoiceNoteChange={setOrderVoiceNoteUrl}
+                textNotes={orderVoiceNotes}
+                onTextNotesChange={setOrderVoiceNotes}
+                title="Add Order Voice Instructions"
+                subtitle="Leave delivery, packaging or urgent artwork voice notes"
+                notesLabel="Order / Delivery Note (EN/HI dictation supported):"
+                notesPlaceholder="e.g. Call before Delhivery delivery, deliver before 5 PM, pack sizes separately."
+                compact
+              />
 
               {/* Promo Code Input & Quick WELCOME10 Chip */}
               <div className="bg-[#FAF9FD] border border-[#ECEAF3] rounded-xl p-3.5 space-y-2.5">

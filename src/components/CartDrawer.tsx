@@ -174,8 +174,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         </div>
                       )}
                       {item.voiceNoteUrl && (
-                        <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md inline-flex items-center gap-1 mt-1 font-mono">
-                          <span>🎙️ Voice instructions attached</span>
+                        <div className="mt-2 bg-emerald-50/80 border border-emerald-200 rounded-lg p-2 space-y-1.5">
+                          <div className="text-[10px] text-emerald-700 font-mono font-semibold flex items-center gap-1">
+                            <span>🎙️ Voice instructions attached</span>
+                          </div>
+                          <audio controls src={item.voiceNoteUrl} className="w-full h-8 rounded-md" />
                         </div>
                       )}
                       {(item.frontArtwork || item.backArtwork || item.artwork) && (

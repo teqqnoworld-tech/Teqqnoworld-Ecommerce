@@ -14,6 +14,7 @@ export interface OrderEmailItem {
   mockupBackUrl?: string;
   extraArtworkUrls?: string[];
   customNotes?: string;
+  voiceNoteUrl?: string;
   quantity: number;
   price: number;
   totalPrice?: number;
@@ -31,6 +32,8 @@ export interface OrderConfirmationEmailPayload {
   amountPaid?: number;
   balanceDue?: number;
   razorpayPaymentId?: string;
+  orderVoiceNoteUrl?: string;
+  orderNotes?: string;
   items: OrderEmailItem[];
   subtotal: number;
   gstAmount: number;

@@ -10,10 +10,6 @@ import {
   Maximize2, 
   X, 
   Upload, 
-  Mic, 
-  Square, 
-  Play, 
-  Trash2, 
   Edit3, 
   CheckCircle2, 
   AlertCircle, 
@@ -52,7 +48,10 @@ import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
 import { calculateProductPrice, formatCurrencyINR } from '../data/pricingRules';
 import { compressImageFile } from '../utils/imageCompressor';
 import { ProductDesignStudioModal } from './ProductDesignStudioModal';
+import { PlainPoloStudioModal } from './plain-polo-studio/PlainPoloStudioModal';
+import { PlainPoloModalCommitPayload } from './plain-polo-studio/plainPoloStudioTypes';
 import { generateItemMockupSnapshots } from '../utils/mockupSnapshot';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -691,63 +690,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }
   };
 
-  // 5. Voice Note Recording
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  // 5. Voice Note & Written Instructions
   const [voiceNoteBlobUrl, setVoiceNoteBlobUrl] = useState<string | null>(null);
-  const [isVoiceNoteOpen, setIsVoiceNoteOpen] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
   const [additionalTextNotes, setAdditionalTextNotes] = useState('');
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerIntervalRef = useRef<any>(null);
-
-  const startVoiceRecording = async () => {
-    setVoiceError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        setVoiceNoteBlobUrl(audioUrl);
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingSeconds(0);
-      timerIntervalRef.current = setInterval(() => {
-        setRecordingSeconds(s => s + 1);
-      }, 1000);
-    } catch (err) {
-      console.warn('Microphone permission not granted or unavailable:', err);
-      setVoiceError('Microphone access was not permitted. Please type your instructions below instead.');
-    }
-  };
-
-  const stopVoiceRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      clearInterval(timerIntervalRef.current);
-    }
-  };
-
-  const clearVoiceNote = () => {
-    setVoiceNoteBlobUrl(null);
-    setRecordingSeconds(0);
-    setVoiceError(null);
-  };
 
   // 6. Gallery Views & Lightbox
   const [activeThumbnailIndex, setActiveThumbnailIndex] = useState(0);
@@ -758,6 +703,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const isMattyPolo = product.id === 'prod-matty-polo' || product.slug?.includes('matty-polo');
   const isJoabPolo = product.id === 'prod-joab-coolmax' || product.slug?.includes('joab-coolmax');
   const isPlainPolo = product.id === 'prod-plain-polo' || product.slug?.includes('plain-polo');
+  const isStrictPlainPolo =
+    product.id === 'prod-plain-polo' || product.slug === 'customized-plain-polo-t-shirt';
   const isPolo = product.productType === 'polo' || product.id === 'prod-polo-01' || isPlainPolo || isJoabPolo || isMattyPolo;
   const poloImages = isMattyPolo
     ? (selectedColor.imageFront && selectedColor.imageBack
@@ -910,6 +857,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontArtwork: frontArtwork || null,
       frontPlacement: frontArtwork ? frontPlacement : undefined,
       customNotes: additionalTextNotes || `Promotional Canopy Kiosk (${selectedCanopySize}, Navy Blue ONLY)`,
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: frontArtwork ? 'uploaded' : 'no_artwork'
     } : isMug ? {
       id: `cart-${product.id}-${Date.now()}`,
@@ -926,6 +874,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontPlacement: frontArtwork ? frontPlacement : undefined,
       backPlacement: backArtwork ? backPlacement : undefined,
       customNotes: additionalTextNotes || 'Promotional Ceramic Mug (White ONLY)',
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: (frontArtwork || backArtwork) ? 'uploaded' : 'no_artwork'
     } : isUmbrella ? {
       id: `cart-${product.id}-${Date.now()}`,
@@ -942,6 +891,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontPlacement: frontArtwork ? frontPlacement : undefined,
       backPlacement: backArtwork ? backPlacement : undefined,
       customNotes: additionalTextNotes || `Custom Printed Branding Umbrella (${selectedColor.name})`,
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: (frontArtwork || backArtwork) ? 'uploaded' : 'no_artwork'
     } : isVisitingCard ? {
       id: `cart-${product.id}-${Date.now()}`,
@@ -972,6 +922,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontPlacement: 'Front Side (92 × 52 MM)',
       backPlacement: 'Back Side (92 × 52 MM)',
       customNotes: additionalTextNotes || 'Premium 300 GSM Visiting Card · Both Side Digital Print · White Paper Base ONLY',
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: (visitingCardDesign.frontDataUrl || visitingCardDesign.backDataUrl) ? 'uploaded' : 'no_artwork',
       visitingCardDesign: { ...visitingCardDesign },
     } : isStandee ? {
@@ -988,6 +939,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontArtwork: frontArtwork || null,
       frontPlacement: frontArtwork ? frontPlacement : undefined,
       customNotes: additionalTextNotes || 'Rollup Standee · 3 ft × 6 ft · Black ONLY · Carry Bag Included',
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: frontArtwork ? 'uploaded' : 'no_artwork'
     } : isPromoTable ? {
       id: `cart-${product.id}-${Date.now()}`,
@@ -1002,6 +954,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       frontArtwork: frontArtwork || null,
       frontPlacement: frontArtwork ? frontPlacement : undefined,
       customNotes: additionalTextNotes || 'Portable Promo Table (White)',
+      voiceNoteUrl: voiceNoteBlobUrl || undefined,
       artworkStatus: frontArtwork ? 'uploaded' : 'no_artwork'
     } : {
       id: `cart-${product.id}-${Date.now()}`,
@@ -2468,19 +2421,41 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               {/* ------------------------------------------------------------------- */}
               <div className="space-y-3 pt-4 border-t border-[#E5E5EA]">
                 
-                {/* 1. Primary Orange Button */}
-                <button
-                  onClick={() => setIsDesignModalOpen(true)}
-                  className="w-full bg-[#FF7A00] hover:bg-[#ff881a] text-white p-3.5 rounded-xl shadow-md transition-all text-center group"
-                >
-                  <div className="font-display font-bold text-sm tracking-wide flex items-center justify-center gap-2">
-                    <Edit3 className="w-4 h-4" />
-                    <span>Edit your design</span>
-                  </div>
-                  <div className="text-[11px] text-white/90 font-medium mt-0.5">
-                    Your logo is on it · change colour, size or text
-                  </div>
-                </button>
+                {/* 1. Primary Studio Button */}
+                {isStrictPlainPolo ? (
+                  <button
+                    onClick={() => setIsDesignModalOpen(true)}
+                    className="w-full bg-gradient-to-r from-[#071B35] to-[#0E2B52] hover:from-[#0B2344] hover:to-[#133563] text-white p-3.5 sm:p-4 rounded-xl shadow-md border border-[#FF7900]/40 transition-all text-left group cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-display font-bold text-xs sm:text-sm tracking-wide flex items-center gap-2 min-w-0">
+                        <span className="w-7 h-7 rounded-lg bg-[#FF7900] text-white flex items-center justify-center shrink-0">
+                          <Sparkles className="w-4 h-4" />
+                        </span>
+                        <span className="truncate">Open 230 GSM Polo Studio</span>
+                      </div>
+                      <span className="text-[10px] font-mono uppercase bg-[#FF7900] text-white px-2 py-0.5 rounded font-bold shrink-0">
+                        Pro Studio
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 font-medium mt-1.5 pl-9 leading-snug">
+                      Layers · Magic Eraser · Front &amp; Back zones · Save, Compare &amp; PNG Proof
+                    </div>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setIsDesignModalOpen(true)}
+                    className="w-full bg-[#FF7A00] hover:bg-[#ff881a] text-white p-3.5 rounded-xl shadow-md transition-all text-center group"
+                  >
+                    <div className="font-display font-bold text-sm tracking-wide flex items-center justify-center gap-2">
+                      <Edit3 className="w-4 h-4" />
+                      <span>Edit your design</span>
+                    </div>
+                    <div className="text-[11px] text-white/90 font-medium mt-0.5">
+                      Your logo is on it · change colour, size or text
+                    </div>
+                  </button>
+                )}
 
                 {/* 2. White Card: Just Upload Your Logo */}
                 <div 
@@ -2648,96 +2623,21 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               )}
 
               {/* ------------------------------------------------------------------- */}
-              {/* SECTION: Voice Note & Instructions (matching screenshot 3)          */}
+              {/* SECTION: Voice Note & Written Instructions                          */}
               {/* ------------------------------------------------------------------- */}
               <div className="pt-4 border-t border-[#E5E5EA]">
-                <div 
-                  onClick={() => setIsVoiceNoteOpen(!isVoiceNoteOpen)}
-                  className="bg-white hover:bg-zinc-50 border border-zinc-200 rounded-xl p-3.5 cursor-pointer transition-all flex items-center justify-between shadow-2xs"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200/60">
-                      <Mic className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-zinc-900 flex items-center gap-2">
-                        <span>Record a voice note</span>
-                        <span className="text-[10px] font-normal text-zinc-400 bg-zinc-100 px-1.5 py-0.2 rounded">Optional</span>
-                      </div>
-                      <div className="text-[11px] text-zinc-500">
-                        {voiceNoteBlobUrl ? '🎙️ Voice note recorded' : 'Additional instructions, if any'}
-                      </div>
-                    </div>
-                  </div>
-
-                  <span className="text-zinc-400 text-sm">
-                    {isVoiceNoteOpen ? '▼' : '›'}
-                  </span>
-                </div>
-
-                {/* Expandable Voice Recording & Notes Controls */}
-                {isVoiceNoteOpen && (
-                  <div className="mt-3 p-4 bg-zinc-50 rounded-xl border border-zinc-200 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-zinc-800">Voice Instructions:</span>
-                      {voiceNoteBlobUrl && (
-                        <button 
-                          onClick={clearVoiceNote}
-                          className="text-[11px] text-red-600 flex items-center gap-1 hover:underline"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Delete recording</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {!voiceNoteBlobUrl ? (
-                      <div className="flex items-center gap-3">
-                        {!isRecording ? (
-                          <button
-                            onClick={startVoiceRecording}
-                            className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-2 shadow-xs transition-colors"
-                          >
-                            <Mic className="w-4 h-4" />
-                            <span>Start Recording</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={stopVoiceRecording}
-                            className="bg-zinc-900 hover:bg-black text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-2 shadow-xs transition-colors"
-                          >
-                            <Square className="w-3.5 h-3.5 fill-current" />
-                            <span>Stop ({recordingSeconds}s)</span>
-                          </button>
-                        )}
-                        <span className="text-[11px] text-zinc-500">
-                          {isRecording ? 'Recording your voice...' : 'Max 60 seconds'}
-                        </span>
-                      </div>
-                    ) : (
-                      <audio controls src={voiceNoteBlobUrl} className="w-full h-9 rounded-lg" />
-                    )}
-
-                    {voiceError && (
-                      <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
-                        {voiceError}
-                      </div>
-                    )}
-
-                    <div className="pt-2">
-                      <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
-                        Or Type Notes (PMS color codes, packaging preferences, neck labels):
-                      </label>
-                      <textarea
-                        value={additionalTextNotes}
-                        onChange={(e) => setAdditionalTextNotes(e.target.value)}
-                        placeholder="e.g. Please use Pantone 286C thread for embroidery. Pack each piece in individual branded polybags."
-                        rows={2}
-                        className="w-full p-2.5 bg-white border border-zinc-300 rounded-lg text-xs text-zinc-800 focus:outline-hidden focus:border-[#FF7A00]"
-                      />
-                    </div>
-                  </div>
-                )}
+                <VoiceInstructionsCard
+                  voiceNoteUrl={voiceNoteBlobUrl}
+                  onVoiceNoteChange={setVoiceNoteBlobUrl}
+                  textNotes={additionalTextNotes}
+                  onTextNotesChange={setAdditionalTextNotes}
+                  title="Record a voice note"
+                  subtitle={
+                    voiceNoteBlobUrl
+                      ? 'Voice instructions recorded & ready to attach'
+                      : 'Record up to 60s instructions in Hindi / English or type notes'
+                  }
+                />
               </div>
 
               {/* ------------------------------------------------------------------- */}
@@ -2798,6 +2698,23 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </div>
 
             </div>
+            )}
+
+            {(isVisitingCard || isCanopy || isStandee || isUmbrella || isMug || isPromoTable) && (
+              <div className="bg-white rounded-2xl border border-[#E5E5EA] p-4 shadow-xs">
+                <VoiceInstructionsCard
+                  voiceNoteUrl={voiceNoteBlobUrl}
+                  onVoiceNoteChange={setVoiceNoteBlobUrl}
+                  textNotes={additionalTextNotes}
+                  onTextNotesChange={setAdditionalTextNotes}
+                  title="Record a voice note"
+                  subtitle={
+                    voiceNoteBlobUrl
+                      ? 'Voice instructions recorded & ready to attach'
+                      : 'Record up to 60s instructions in Hindi / English or type notes'
+                  }
+                />
+              </div>
             )}
 
           </div>
@@ -3355,7 +3272,116 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       {/* ========================================================================= */}
       {/* MODAL: Fullscreen Interactive Design Studio Modal                         */}
       {/* ========================================================================= */}
-      {isDesignModalOpen && (
+      {isDesignModalOpen && isStrictPlainPolo && (
+        <PlainPoloStudioModal
+          key={`plain-polo-studio-${product.id}`}
+          isOpen={isDesignModalOpen}
+          onClose={() => setIsDesignModalOpen(false)}
+          product={product}
+          selectedColor={selectedColor}
+          onSelectColor={setSelectedColor}
+          quantity={quantity}
+          onQuantityChange={setQuantity}
+          sizeDistribution={sizeDistribution}
+          onSizeDistributionChange={setSizeDistribution}
+          frontArtwork={frontArtwork}
+          backArtwork={backArtwork}
+          frontPlacement={frontPlacement}
+          backPlacement={backPlacement}
+          selectedPrintMethod={selectedPrintMethod}
+          onSelectPrintMethod={setSelectedPrintMethod}
+          uploadedFrontLogoName={uploadedFrontLogoName}
+          uploadedBackLogoName={uploadedBackLogoName}
+          initialArtworkApproved={artworkStatus === 'approved'}
+          initialActiveSide={modalActiveSide}
+          onCommitStudioChanges={(payload: PlainPoloModalCommitPayload) => {
+            setFrontArtwork(payload.frontArtwork);
+            setBackArtwork(payload.backArtwork);
+            setFrontPlacement(payload.frontPlacement);
+            setBackPlacement(payload.backPlacement);
+            setUploadedFrontLogoName(payload.uploadedFrontLogoName);
+            setUploadedBackLogoName(payload.uploadedBackLogoName);
+            if (payload.selectedColor) setSelectedColor(payload.selectedColor);
+            if (payload.selectedPrintMethod) setSelectedPrintMethod(payload.selectedPrintMethod);
+            if (typeof payload.quantity === 'number') setQuantity(payload.quantity);
+            if (payload.sizeDistribution) setSizeDistribution(payload.sizeDistribution);
+            setArtworkStatus(
+              payload.artworkStatus === 'approved'
+                ? 'approved'
+                : payload.frontArtwork || payload.backArtwork
+                ? 'uploaded'
+                : 'awaiting_review'
+            );
+          }}
+          onDirectAddToCart={async (payload: PlainPoloModalCommitPayload) => {
+            setFrontArtwork(payload.frontArtwork);
+            setBackArtwork(payload.backArtwork);
+            setFrontPlacement(payload.frontPlacement);
+            setBackPlacement(payload.backPlacement);
+            setUploadedFrontLogoName(payload.uploadedFrontLogoName);
+            setUploadedBackLogoName(payload.uploadedBackLogoName);
+            if (payload.selectedColor) setSelectedColor(payload.selectedColor);
+            if (payload.selectedPrintMethod) setSelectedPrintMethod(payload.selectedPrintMethod);
+            if (typeof payload.quantity === 'number') setQuantity(payload.quantity);
+            if (payload.sizeDistribution) setSizeDistribution(payload.sizeDistribution);
+            const nextStatus =
+              payload.artworkStatus === 'approved'
+                ? 'approved'
+                : payload.frontArtwork || payload.backArtwork
+                ? 'uploaded'
+                : 'awaiting_review';
+            setArtworkStatus(nextStatus);
+
+            const qtyToUse = payload.quantity ?? quantity;
+            const colorToUse = payload.selectedColor ?? selectedColor;
+            const methodToUse = payload.selectedPrintMethod ?? selectedPrintMethod;
+            const pricingForCart = calculateProductPrice(product.id, qtyToUse);
+            const activeArt = payload.frontArtwork || payload.backArtwork || undefined;
+            const activePlace = payload.frontArtwork
+              ? payload.frontPlacement
+              : payload.backArtwork
+              ? payload.backPlacement
+              : 'Custom Print';
+
+            const directItem: CartItem = {
+              id: `cart-${product.id}-${Date.now()}`,
+              product,
+              color: colorToUse,
+              size: product.sizes
+                ? Object.keys(payload.sizeDistribution || sizeDistribution).find(
+                    (k) => (payload.sizeDistribution || sizeDistribution)[k] > 0
+                  ) || 'L'
+                : undefined,
+              sizeDistribution: payload.sizeDistribution || sizeDistribution,
+              quantity: qtyToUse,
+              unitPrice: pricingForCart.unitPrice,
+              totalPrice: pricingForCart.totalPrice,
+              printMethod: methodToUse,
+              printPlacement: activePlace,
+              artwork: activeArt,
+              frontArtwork: payload.frontArtwork || null,
+              backArtwork: payload.backArtwork || null,
+              frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+              backPlacement: payload.backArtwork ? payload.backPlacement : undefined,
+              customNotes: additionalTextNotes || 'Custom Plain Polo corporate order',
+              voiceNoteUrl: voiceNoteBlobUrl || undefined,
+              artworkStatus: nextStatus,
+            };
+
+            try {
+              const { frontMockupDataUrl, backMockupDataUrl } = await generateItemMockupSnapshots(directItem);
+              if (frontMockupDataUrl) directItem.previewUrl = frontMockupDataUrl;
+              if (backMockupDataUrl) directItem.backPreviewUrl = backMockupDataUrl;
+            } catch (snapErr) {
+              console.warn('[PlainPoloStudio] Direct cart snapshot skipped:', snapErr);
+            }
+
+            onAddToCart(directItem);
+          }}
+        />
+      )}
+
+      {isDesignModalOpen && !isStrictPlainPolo && (
         <ProductDesignStudioModal
           key={product.id}
           isOpen={isDesignModalOpen}

@@ -147,6 +147,16 @@ export const ProductMockupCanvas: React.FC<ProductMockupCanvasProps> = ({
         case 'polo':
         case 'tshirt':
           // Large Upper-Center Logo directly below collar (matching reference image)
+          if (printPlacement === 'Centre Back' || printPlacement === 'Centre back') {
+            return {
+              cx: 250,
+              cy: 215 + poloYCalib,
+              w: 150,
+              h: 135,
+              boxSize: 112,
+              label: 'Centre Back'
+            };
+          }
           if (
             printPlacement === 'Upper Back Center' ||
             printPlacement === 'Upper Back Neck' ||
@@ -1050,9 +1060,9 @@ export const ProductMockupCanvas: React.FC<ProductMockupCanvasProps> = ({
 
                     {layer.kind === 'text' && (
                       <text
-                        x={0}
+                        x={layer.textAlign === 'left' ? -halfW : layer.textAlign === 'right' ? halfW : 0}
                         y={(layer.fontSize || 14) * 0.34}
-                        textAnchor="middle"
+                        textAnchor={layer.textAlign === 'left' ? 'start' : layer.textAlign === 'right' ? 'end' : 'middle'}
                         fill={layer.textColor || '#FFFFFF'}
                         fontSize={layer.fontSize || 14}
                         fontFamily={layer.fontFamily || 'Space Grotesk'}

@@ -73,6 +73,8 @@ export interface StudioLayer {
   rotation: number; // degrees
   opacity: number; // 0 to 1
   visible?: boolean;
+  name?: string;
+  locked?: boolean;
   // Image / Logo fields
   dataUrl?: string;
   isMainLogo?: boolean;
@@ -84,6 +86,7 @@ export interface StudioLayer {
   fontWeight?: string;
   fontStyle?: 'normal' | 'italic';
   textTransform?: 'none' | 'uppercase';
+  textAlign?: 'left' | 'center' | 'right';
   textColor?: string;
   letterSpacing?: number;
   curve?: number; // -100 to 100 for curved text
@@ -312,6 +315,8 @@ export interface Order {
   balanceDue?: number;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
+  orderVoiceNoteUrl?: string;
+  orderNotes?: string;
   emailNotification?: {
     status: 'sent' | 'simulated' | 'failed';
     message?: string;

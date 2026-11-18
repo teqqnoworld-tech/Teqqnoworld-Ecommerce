@@ -2933,6 +2933,14 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                               Client Note: <span className="text-[#071B35]">{parsed.customNotesText}</span>
                             </div>
                           )}
+                          {parsed.voiceNoteUrl && (
+                            <div className="pt-2 border-t border-slate-200 space-y-1">
+                              <div className="text-[11px] font-semibold text-emerald-700">
+                                🎙️ Customer Voice Instructions
+                              </div>
+                              <audio controls src={parsed.voiceNoteUrl} className="w-full h-8 rounded-lg" />
+                            </div>
+                          )}
                         </div>
                       </div>
 

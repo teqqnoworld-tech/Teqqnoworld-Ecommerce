@@ -19,6 +19,7 @@ import { PRODUCTS } from '../data/mockData';
 import { Product, CartItem, ProductColor } from '../types';
 import { formatWhatsAppQuoteUrl } from '../utils/whatsapp';
 import { compressImageFile } from '../utils/imageCompressor';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 
 interface GiftBoxOption {
   id: string;
@@ -76,6 +77,8 @@ export const CorporateGiftBundleBuilder: React.FC<CorporateGiftBundleBuilderProp
   // Step 1: Selected Box
   const [selectedBoxId, setSelectedBoxId] = useState<string>(BOX_OPTIONS[0].id);
   const selectedBox = BOX_OPTIONS.find(b => b.id === selectedBoxId) || BOX_OPTIONS[0];
+  const [voiceNoteUrl, setVoiceNoteUrl] = useState<string | null>(null);
+  const [voiceNotes, setVoiceNotes] = useState<string>('');
 
   // Available candidate items for the kit
   const availableItems = useMemo(() => {
@@ -212,7 +215,8 @@ export const CorporateGiftBundleBuilder: React.FC<CorporateGiftBundleBuilderProp
       totalPrice: bundleCalculation.subtotal,
       printMethod: 'High-Precision UV',
       printPlacement: 'Center Chest / Laser Custom Inlay',
-      customNotes: `Corporate Kit for ${companyName}: ${selectedItems.map(i => `${i.product.name} (${i.color.name}${i.size ? ', Size ' + i.size : ''})`).join(', ')}. Box: ${selectedBox.name}.`,
+      customNotes: `Corporate Kit for ${companyName}: ${selectedItems.map(i => `${i.product.name} (${i.color.name}${i.size ? ', Size ' + i.size : ''})`).join(', ')}. Box: ${selectedBox.name}.${voiceNotes.trim() ? ` | Notes: ${voiceNotes.trim()}` : ''}`,
+      voiceNoteUrl: voiceNoteUrl || undefined,
     };
 
     onAddToCart(cartItem);
@@ -563,6 +567,17 @@ export const CorporateGiftBundleBuilder: React.FC<CorporateGiftBundleBuilderProp
                 </div>
               </div>
             </div>
+
+            {/* Voice Instructions */}
+            <VoiceInstructionsCard
+              voiceNoteUrl={voiceNoteUrl}
+              onVoiceNoteChange={setVoiceNoteUrl}
+              textNotes={voiceNotes}
+              onTextNotesChange={setVoiceNotes}
+              title="Add Kit Voice Instructions"
+              subtitle="Explain welcome card message, branding or box delivery details"
+              compact
+            />
 
             {/* Action Buttons */}
             <div className="space-y-2 pt-2">

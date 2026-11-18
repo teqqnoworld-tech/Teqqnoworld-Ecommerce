@@ -20,6 +20,7 @@ import { calculateProductPrice } from '../data/pricingRules';
 import { Product, CartItem, PrintMethod } from '../types';
 import { formatWhatsAppQuoteUrl } from '../utils/whatsapp';
 import { BUSINESS_DETAILS } from '../data/legalData';
+import { VoiceInstructionsCard } from './VoiceInstructionsCard';
 
 interface BulkQuotationCalculatorProps {
   onAddToCart?: (item: CartItem) => void;
@@ -52,6 +53,8 @@ export const BulkQuotationCalculator: React.FC<BulkQuotationCalculatorProps> = (
   const [selectedPrintMethod, setSelectedPrintMethod] = useState<PrintMethod>(
     selectedProduct.printMethods[0] || 'Precision Embroidery'
   );
+  const [voiceNoteUrl, setVoiceNoteUrl] = useState<string | null>(null);
+  const [voiceNotes, setVoiceNotes] = useState<string>('');
 
   // B2B Add-on options
   const [includePolybag, setIncludePolybag] = useState<boolean>(true);
@@ -121,7 +124,8 @@ export const BulkQuotationCalculator: React.FC<BulkQuotationCalculatorProps> = (
       totalPrice: pricing.subtotal,
       printMethod: selectedPrintMethod,
       printPlacement: 'Center Chest / Standard B2B Placement',
-      customNotes: `B2B Bulk Quote: ${includePolybag ? 'Individual Polybag. ' : ''}${includeCustomNeckLabel ? 'Custom Neck Label. ' : ''}${includeExpressDispatch ? 'Express 48h Dispatch. ' : ''}Ref: ${quotationNumber}`,
+      customNotes: `B2B Bulk Quote: ${includePolybag ? 'Individual Polybag. ' : ''}${includeCustomNeckLabel ? 'Custom Neck Label. ' : ''}${includeExpressDispatch ? 'Express 48h Dispatch. ' : ''}Ref: ${quotationNumber}${voiceNotes.trim() ? ` | Notes: ${voiceNotes.trim()}` : ''}`,
+      voiceNoteUrl: voiceNoteUrl || undefined,
     };
 
     onAddToCart(cartItem);
@@ -588,6 +592,17 @@ export const BulkQuotationCalculator: React.FC<BulkQuotationCalculatorProps> = (
                   <span>{addedToCartToast ? 'Added to Cart Successfully!' : 'Add This Batch to Cart'}</span>
                 </button>
               )}
+
+              {/* Voice Instructions */}
+              <VoiceInstructionsCard
+                voiceNoteUrl={voiceNoteUrl}
+                onVoiceNoteChange={setVoiceNoteUrl}
+                textNotes={voiceNotes}
+                onTextNotesChange={setVoiceNotes}
+                title="Add Bulk Order Voice Note"
+                subtitle="Record special packaging, sizing or dispatch timing instructions"
+                compact
+              />
 
             </div>
 
