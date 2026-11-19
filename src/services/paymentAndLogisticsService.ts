@@ -64,9 +64,13 @@ export interface DelhiveryPincodeCheckResult {
   pincode: string;
   city?: string;
   state?: string;
+  areaName?: string;
   prepaid?: boolean;
   cod?: boolean;
   estimatedDays?: string;
+  dispatchHub?: string;
+  courier?: string;
+  source?: string;
   message?: string;
 }
 
@@ -262,6 +266,10 @@ export async function checkDelhiveryPincode(pincode: string): Promise<DelhiveryP
   }
   try {
     const res = await fetch(`/api/delhivery/pincode?pin=${encodeURIComponent(cleanPin)}`);
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      throw new Error('Serviceability lookup temporarily unavailable.');
+    }
     return await res.json();
   } catch (err: any) {
     return {

@@ -48,10 +48,12 @@ import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
 import { calculateProductPrice, formatCurrencyINR } from '../data/pricingRules';
 import { compressImageFile } from '../utils/imageCompressor';
 import { ProductDesignStudioModal } from './ProductDesignStudioModal';
+import { ProductModalCommitPayload } from './productStudioConfigs';
 import { PlainPoloStudioModal } from './plain-polo-studio/PlainPoloStudioModal';
 import { PlainPoloModalCommitPayload } from './plain-polo-studio/plainPoloStudioTypes';
 import { generateItemMockupSnapshots } from '../utils/mockupSnapshot';
 import { VoiceInstructionsCard } from './VoiceInstructionsCard';
+import { DelhiveryPincodeChecker } from './DelhiveryPincodeChecker';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -2717,6 +2719,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </div>
             )}
 
+            {/* Live Delhivery Area Availability & ETA Checker */}
+            <DelhiveryPincodeChecker variant="compact" className="bg-white shadow-xs" />
+
           </div>
 
         </div>
@@ -3394,6 +3399,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           unitPrice={unitPrice}
           totalPrice={totalPrice}
           moq={moq}
+          sizeDistribution={sizeDistribution}
+          onSizeDistributionChange={setSizeDistribution}
           frontArtwork={frontArtwork}
           backArtwork={backArtwork}
           frontPlacement={frontPlacement}
@@ -3402,23 +3409,195 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           onSelectPrintMethod={setSelectedPrintMethod}
           uploadedFrontLogoName={uploadedFrontLogoName}
           uploadedBackLogoName={uploadedBackLogoName}
+          initialArtworkApproved={artworkStatus === 'approved'}
           initialActiveSide={modalActiveSide}
           selectedVariantLabel={isCanopy ? selectedCanopySize : undefined}
-          onCommitStudioChanges={({
-            frontArtwork: nextFront,
-            backArtwork: nextBack,
-            frontPlacement: nextFrontPos,
-            backPlacement: nextBackPos,
-            uploadedFrontLogoName: nextFrontName,
-            uploadedBackLogoName: nextBackName,
-          }) => {
-            setFrontArtwork(nextFront);
-            setBackArtwork(nextBack);
-            setFrontPlacement(nextFrontPos);
-            setBackPlacement(nextBackPos);
-            setUploadedFrontLogoName(nextFrontName);
-            setUploadedBackLogoName(nextBackName);
-            setArtworkStatus(nextFront || nextBack ? 'uploaded' : 'awaiting_review');
+          onSelectVariantLabel={
+            isCanopy
+              ? (v: string) => setSelectedCanopySize(v === '8 × 8 ft' ? '8 × 8 ft' : '4 × 4 ft')
+              : undefined
+          }
+          onCommitStudioChanges={(payload: ProductModalCommitPayload) => {
+            setFrontArtwork(payload.frontArtwork);
+            setBackArtwork(payload.backArtwork);
+            setFrontPlacement(payload.frontPlacement);
+            setBackPlacement(payload.backPlacement);
+            setUploadedFrontLogoName(payload.uploadedFrontLogoName);
+            setUploadedBackLogoName(payload.uploadedBackLogoName);
+            if (payload.selectedColor) setSelectedColor(payload.selectedColor);
+            if (payload.selectedPrintMethod) setSelectedPrintMethod(payload.selectedPrintMethod);
+            if (typeof payload.quantity === 'number') setQuantity(payload.quantity);
+            if (payload.sizeDistribution) setSizeDistribution(payload.sizeDistribution);
+            if (isCanopy && payload.selectedVariantLabel) {
+              setSelectedCanopySize(payload.selectedVariantLabel === '8 × 8 ft' ? '8 × 8 ft' : '4 × 4 ft');
+            }
+            setArtworkStatus(
+              payload.artworkStatus === 'approved'
+                ? 'approved'
+                : payload.frontArtwork || payload.backArtwork
+                ? 'uploaded'
+                : 'awaiting_review'
+            );
+          }}
+          onDirectAddToCart={async (payload: ProductModalCommitPayload) => {
+            setFrontArtwork(payload.frontArtwork);
+            setBackArtwork(payload.backArtwork);
+            setFrontPlacement(payload.frontPlacement);
+            setBackPlacement(payload.backPlacement);
+            setUploadedFrontLogoName(payload.uploadedFrontLogoName);
+            setUploadedBackLogoName(payload.uploadedBackLogoName);
+            if (payload.selectedColor) setSelectedColor(payload.selectedColor);
+            if (payload.selectedPrintMethod) setSelectedPrintMethod(payload.selectedPrintMethod);
+            if (typeof payload.quantity === 'number') setQuantity(payload.quantity);
+            if (payload.sizeDistribution) setSizeDistribution(payload.sizeDistribution);
+            const variantToUse = isCanopy ? payload.selectedVariantLabel || selectedCanopySize : undefined;
+            if (isCanopy && payload.selectedVariantLabel) {
+              setSelectedCanopySize(payload.selectedVariantLabel === '8 × 8 ft' ? '8 × 8 ft' : '4 × 4 ft');
+            }
+
+            const nextStatus =
+              payload.artworkStatus === 'approved'
+                ? 'approved'
+                : payload.frontArtwork || payload.backArtwork
+                ? 'uploaded'
+                : 'awaiting_review';
+            setArtworkStatus(nextStatus);
+
+            const qtyToUse = payload.quantity ?? quantity;
+            const colorToUse = payload.selectedColor ?? selectedColor;
+            const methodToUse = payload.selectedPrintMethod ?? selectedPrintMethod;
+            const pricingForCart = calculateProductPrice(product.id, qtyToUse, variantToUse);
+            const activeArt = payload.frontArtwork || payload.backArtwork || undefined;
+            const activePlace = payload.frontArtwork
+              ? payload.frontPlacement
+              : payload.backArtwork
+              ? payload.backPlacement
+              : 'Custom Print';
+            const distToUse = payload.sizeDistribution || sizeDistribution;
+
+            const directItem: CartItem = isCanopy
+              ? {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: { name: 'Navy Blue', hex: '#162B4D', garmentHex: '#162B4D' },
+                  size: variantToUse || '4 × 4 ft',
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: 'Screen Printing',
+                  printPlacement: payload.frontArtwork ? payload.frontPlacement : 'Standard Canopy Kiosk',
+                  artwork: payload.frontArtwork || undefined,
+                  frontArtwork: payload.frontArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  customNotes: additionalTextNotes || `Promotional Canopy Kiosk (${variantToUse || '4 × 4 ft'}, Navy Blue ONLY)`,
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                }
+              : isMug
+              ? {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: colorToUse,
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: methodToUse || 'High-Precision UV',
+                  printPlacement: activePlace,
+                  artwork: activeArt,
+                  frontArtwork: payload.frontArtwork || null,
+                  backArtwork: payload.backArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  backPlacement: payload.backArtwork ? payload.backPlacement : undefined,
+                  customNotes: additionalTextNotes || 'Promotional Ceramic Mug (White ONLY)',
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                }
+              : isUmbrella
+              ? {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: colorToUse,
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: methodToUse || 'Screen Printing',
+                  printPlacement: activePlace,
+                  artwork: activeArt,
+                  frontArtwork: payload.frontArtwork || null,
+                  backArtwork: payload.backArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  backPlacement: payload.backArtwork ? payload.backPlacement : undefined,
+                  customNotes: additionalTextNotes || `Custom Printed Branding Umbrella (${colorToUse.name})`,
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                }
+              : isStandee
+              ? {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: { name: 'Black', hex: '#111215', garmentHex: '#111215' },
+                  size: '3 ft × 6 ft (36 × 72 in)',
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: methodToUse || 'Screen Printing',
+                  printPlacement: payload.frontArtwork ? payload.frontPlacement : 'Rollup Banner (3 ft × 6 ft)',
+                  artwork: payload.frontArtwork || undefined,
+                  frontArtwork: payload.frontArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  customNotes: additionalTextNotes || 'Rollup Standee · 3 ft × 6 ft · Black ONLY · Carry Bag Included',
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                }
+              : isPromoTable
+              ? {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: colorToUse,
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: methodToUse || 'High-Precision UV',
+                  printPlacement: payload.frontArtwork ? payload.frontPlacement : 'Header & Counter Display',
+                  artwork: payload.frontArtwork || undefined,
+                  frontArtwork: payload.frontArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  customNotes: additionalTextNotes || 'Portable Promo Table (White)',
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                }
+              : {
+                  id: `cart-${product.id}-${Date.now()}`,
+                  product,
+                  color: colorToUse,
+                  size: product.sizes
+                    ? Object.keys(distToUse).find((k) => distToUse[k] > 0) || 'L'
+                    : undefined,
+                  sizeDistribution: distToUse,
+                  quantity: qtyToUse,
+                  unitPrice: pricingForCart.unitPrice,
+                  totalPrice: pricingForCart.totalPrice,
+                  printMethod: methodToUse,
+                  printPlacement: activePlace,
+                  artwork: activeArt,
+                  frontArtwork: payload.frontArtwork || null,
+                  backArtwork: payload.backArtwork || null,
+                  frontPlacement: payload.frontArtwork ? payload.frontPlacement : undefined,
+                  backPlacement: payload.backArtwork ? payload.backPlacement : undefined,
+                  customNotes: additionalTextNotes || 'Custom corporate branding order',
+                  voiceNoteUrl: voiceNoteBlobUrl || undefined,
+                  artworkStatus: nextStatus,
+                };
+
+            try {
+              const { frontMockupDataUrl, backMockupDataUrl } = await generateItemMockupSnapshots(directItem);
+              if (frontMockupDataUrl) directItem.previewUrl = frontMockupDataUrl;
+              if (backMockupDataUrl) directItem.backPreviewUrl = backMockupDataUrl;
+            } catch (snapErr) {
+              console.warn('[ProductStudio] Direct cart snapshot skipped:', snapErr);
+            }
+
+            onAddToCart(directItem);
           }}
         />
       )}
@@ -3712,9 +3891,75 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           isOpen={isVisitingCardEditorOpen}
           onClose={() => setIsVisitingCardEditorOpen(false)}
           initialDesign={visitingCardDesign}
-          onConfirm={(updatedDesign) => {
+          quantity={quantity}
+          onQuantityChange={setQuantity}
+          initialApproved={artworkStatus === 'approved'}
+          onConfirm={(updatedDesign, approved) => {
             setVisitingCardDesign(updatedDesign);
+            if (approved) setArtworkStatus('approved');
+            else if (updatedDesign.frontDataUrl || updatedDesign.backDataUrl) setArtworkStatus('uploaded');
             setIsVisitingCardEditorOpen(false);
+          }}
+          onDirectAddToCart={async ({ design, quantity: vcQty, artworkApproved: approved }) => {
+            setVisitingCardDesign(design);
+            setQuantity(vcQty);
+            const nextStatus = approved
+              ? 'approved'
+              : design.frontDataUrl || design.backDataUrl
+              ? 'uploaded'
+              : 'no_artwork';
+            setArtworkStatus(nextStatus === 'no_artwork' ? 'awaiting_review' : nextStatus);
+
+            const pricingForVc = calculateProductPrice(product.id, vcQty);
+            const vcItem: CartItem = {
+              id: `cart-${product.id}-${Date.now()}`,
+              product,
+              color: { name: 'White', hex: '#FFFFFF', garmentHex: '#FFFFFF' },
+              size: '92 × 52 MM',
+              quantity: vcQty,
+              unitPrice: pricingForVc.unitPrice,
+              totalPrice: pricingForVc.totalPrice,
+              printMethod: 'High-Precision UV',
+              printPlacement: 'Both Side Printing (Front & Back)',
+              frontArtwork: design.frontDataUrl
+                ? {
+                    type: 'image',
+                    dataUrl: design.frontDataUrl,
+                    x: design.frontSettings.x,
+                    y: design.frontSettings.y,
+                    scale: design.frontSettings.scale,
+                    rotation: design.frontSettings.rotation,
+                  }
+                : null,
+              backArtwork: design.backDataUrl
+                ? {
+                    type: 'image',
+                    dataUrl: design.backDataUrl,
+                    x: design.backSettings.x,
+                    y: design.backSettings.y,
+                    scale: design.backSettings.scale,
+                    rotation: design.backSettings.rotation,
+                  }
+                : null,
+              frontPlacement: 'Front Side (92 × 52 MM)',
+              backPlacement: 'Back Side (92 × 52 MM)',
+              customNotes:
+                additionalTextNotes ||
+                'Premium 300 GSM Visiting Card · Both Side Digital Print · White Paper Base ONLY',
+              voiceNoteUrl: voiceNoteBlobUrl || undefined,
+              artworkStatus: nextStatus,
+              visitingCardDesign: { ...design },
+            };
+
+            try {
+              const { frontMockupDataUrl, backMockupDataUrl } = await generateItemMockupSnapshots(vcItem);
+              if (frontMockupDataUrl) vcItem.previewUrl = frontMockupDataUrl;
+              if (backMockupDataUrl) vcItem.backPreviewUrl = backMockupDataUrl;
+            } catch (snapErr) {
+              console.warn('[VisitingCardStudio] Direct cart snapshot skipped:', snapErr);
+            }
+
+            onAddToCart(vcItem);
           }}
         />
       )}

@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import nodemailer from 'nodemailer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -1044,6 +1045,95 @@ app.get('/api/delhivery/status', (_req: Request, res: Response) => {
   });
 });
 
+const PIN_REGION_DIRECTORY: Record<string, { city: string; state: string; estimatedDays: string }> = {
+  '11': { city: 'New Delhi', state: 'Delhi', estimatedDays: '2–3 business days' },
+  '12': { city: 'Gurugram / NCR', state: 'Haryana', estimatedDays: '2–4 business days' },
+  '13': { city: 'Karnal / Ambala', state: 'Haryana', estimatedDays: '3–4 business days' },
+  '14': { city: 'Ludhiana / Amritsar', state: 'Punjab', estimatedDays: '3–5 business days' },
+  '15': { city: 'Bathinda / Firozpur', state: 'Punjab', estimatedDays: '3–5 business days' },
+  '16': { city: 'Chandigarh', state: 'Chandigarh / Punjab', estimatedDays: '3–4 business days' },
+  '17': { city: 'Shimla / Solan', state: 'Himachal Pradesh', estimatedDays: '4–6 business days' },
+  '18': { city: 'Jammu', state: 'Jammu & Kashmir', estimatedDays: '5–7 business days' },
+  '19': { city: 'Srinagar', state: 'Jammu & Kashmir', estimatedDays: '5–7 business days' },
+  '20': { city: 'Noida / Ghaziabad', state: 'Uttar Pradesh', estimatedDays: '2–4 business days' },
+  '21': { city: 'Prayagraj / Kanpur', state: 'Uttar Pradesh', estimatedDays: '3–5 business days' },
+  '22': { city: 'Lucknow', state: 'Uttar Pradesh', estimatedDays: '3–4 business days' },
+  '23': { city: 'Varanasi', state: 'Uttar Pradesh', estimatedDays: '3–5 business days' },
+  '24': { city: 'Bareilly / Dehradun', state: 'UP / Uttarakhand', estimatedDays: '3–5 business days' },
+  '25': { city: 'Meerut / Muzaffarnagar', state: 'Uttar Pradesh', estimatedDays: '3–5 business days' },
+  '26': { city: 'Nainital / Haldwani', state: 'Uttarakhand', estimatedDays: '4–6 business days' },
+  '27': { city: 'Gorakhpur', state: 'Uttar Pradesh', estimatedDays: '3–5 business days' },
+  '28': { city: 'Agra / Mathura', state: 'Uttar Pradesh', estimatedDays: '3–5 business days' },
+  '30': { city: 'Jaipur', state: 'Rajasthan', estimatedDays: '3–4 business days' },
+  '31': { city: 'Udaipur / Kota', state: 'Rajasthan', estimatedDays: '3–5 business days' },
+  '32': { city: 'Kota / Bharatpur', state: 'Rajasthan', estimatedDays: '3–5 business days' },
+  '33': { city: 'Bikaner / Sikar', state: 'Rajasthan', estimatedDays: '4–5 business days' },
+  '34': { city: 'Jodhpur', state: 'Rajasthan', estimatedDays: '4–5 business days' },
+  '36': { city: 'Rajkot', state: 'Gujarat', estimatedDays: '3–5 business days' },
+  '37': { city: 'Bhuj / Kachchh', state: 'Gujarat', estimatedDays: '4–5 business days' },
+  '38': { city: 'Ahmedabad / Gandhinagar', state: 'Gujarat', estimatedDays: '2–4 business days' },
+  '39': { city: 'Surat / Vadodara', state: 'Gujarat', estimatedDays: '2–4 business days' },
+  '40': { city: 'Mumbai / Thane', state: 'Maharashtra', estimatedDays: '2–3 business days' },
+  '41': { city: 'Pune', state: 'Maharashtra', estimatedDays: '2–3 business days' },
+  '42': { city: 'Nashik / Jalgaon', state: 'Maharashtra', estimatedDays: '3–4 business days' },
+  '43': { city: 'Chhatrapati Sambhajinagar', state: 'Maharashtra', estimatedDays: '2–4 business days' },
+  '44': { city: 'Nagpur', state: 'Maharashtra', estimatedDays: '2–3 business days' },
+  '45': { city: 'Indore', state: 'Madhya Pradesh', estimatedDays: '3–4 business days' },
+  '46': { city: 'Bhopal', state: 'Madhya Pradesh', estimatedDays: '3–4 business days' },
+  '47': { city: 'Gwalior / Jabalpur', state: 'Madhya Pradesh', estimatedDays: '3–5 business days' },
+  '48': { city: 'Jabalpur / Rewa', state: 'Madhya Pradesh', estimatedDays: '3–5 business days' },
+  '49': { city: 'Raipur / Bhilai', state: 'Chhattisgarh', estimatedDays: '2–4 business days' },
+  '50': { city: 'Hyderabad', state: 'Telangana', estimatedDays: '1–2 business days' },
+  '51': { city: 'Tirupati / Kurnool', state: 'Andhra Pradesh', estimatedDays: '2–3 business days' },
+  '52': { city: 'Vijayawada / Guntur', state: 'Andhra Pradesh', estimatedDays: '2–3 business days' },
+  '53': { city: 'Visakhapatnam', state: 'Andhra Pradesh', estimatedDays: '2–3 business days' },
+  '56': { city: 'Bengaluru', state: 'Karnataka', estimatedDays: '2–3 business days' },
+  '57': { city: 'Mysuru / Mangaluru', state: 'Karnataka', estimatedDays: '2–4 business days' },
+  '58': { city: 'Hubballi / Belagavi', state: 'Karnataka', estimatedDays: '2–4 business days' },
+  '59': { city: 'Belagavi / Kalaburagi', state: 'Karnataka', estimatedDays: '2–4 business days' },
+  '60': { city: 'Chennai', state: 'Tamil Nadu', estimatedDays: '2–3 business days' },
+  '61': { city: 'Thanjavur / Tiruchirappalli', state: 'Tamil Nadu', estimatedDays: '3–4 business days' },
+  '62': { city: 'Madurai / Tirunelveli', state: 'Tamil Nadu', estimatedDays: '3–4 business days' },
+  '63': { city: 'Salem / Vellore', state: 'Tamil Nadu', estimatedDays: '2–4 business days' },
+  '64': { city: 'Coimbatore', state: 'Tamil Nadu', estimatedDays: '2–4 business days' },
+  '67': { city: 'Kozhikode / Kannur', state: 'Kerala', estimatedDays: '3–5 business days' },
+  '68': { city: 'Kochi / Ernakulam', state: 'Kerala', estimatedDays: '3–4 business days' },
+  '69': { city: 'Thiruvananthapuram', state: 'Kerala', estimatedDays: '3–5 business days' },
+  '70': { city: 'Kolkata', state: 'West Bengal', estimatedDays: '2–3 business days' },
+  '71': { city: 'Howrah / Durgapur', state: 'West Bengal', estimatedDays: '3–4 business days' },
+  '72': { city: 'Kharagpur / Medinipur', state: 'West Bengal', estimatedDays: '3–5 business days' },
+  '73': { city: 'Siliguri / Jalpaiguri', state: 'West Bengal / Sikkim', estimatedDays: '4–6 business days' },
+  '74': { city: 'North 24 Parganas / Port Blair', state: 'West Bengal / A&N', estimatedDays: '4–6 business days' },
+  '75': { city: 'Bhubaneswar / Cuttack', state: 'Odisha', estimatedDays: '2–4 business days' },
+  '76': { city: 'Berhampur / Sambalpur', state: 'Odisha', estimatedDays: '3–5 business days' },
+  '77': { city: 'Rourkela / Balangir', state: 'Odisha', estimatedDays: '3–5 business days' },
+  '78': { city: 'Guwahati', state: 'Assam', estimatedDays: '4–6 business days' },
+  '79': { city: 'Shillong / Imphal / Agartala', state: 'North-East India', estimatedDays: '5–7 business days' },
+  '80': { city: 'Patna', state: 'Bihar', estimatedDays: '3–5 business days' },
+  '81': { city: 'Bhagalpur / Dumka', state: 'Bihar / Jharkhand', estimatedDays: '4–5 business days' },
+  '82': { city: 'Dhanbad / Gaya', state: 'Jharkhand / Bihar', estimatedDays: '3–5 business days' },
+  '83': { city: 'Ranchi / Jamshedpur', state: 'Jharkhand', estimatedDays: '3–5 business days' },
+  '84': { city: 'Muzaffarpur / Darbhanga', state: 'Bihar', estimatedDays: '4–5 business days' },
+  '85': { city: 'Purnia / Saharsa', state: 'Bihar', estimatedDays: '4–6 business days' },
+};
+
+function estimateEtaByPinAndState(pin: string, stateName?: string): string {
+  const prefix2 = pin.slice(0, 2);
+  if (prefix2 === '50') return '1–2 business days';
+  if (['51', '52', '53', '56', '60', '40', '41', '44', '70', '11'].includes(prefix2)) {
+    return '2–3 business days';
+  }
+  if (['18', '19', '79'].includes(prefix2) || pin.startsWith('744') || pin.startsWith('682')) {
+    return '5–7 business days';
+  }
+  const s = (stateName || '').toLowerCase();
+  if (s.includes('telangana')) return '1–2 business days';
+  if (s.includes('jammu') || s.includes('ladakh') || s.includes('manipur') || s.includes('mizoram') || s.includes('nagaland') || s.includes('arunachal') || s.includes('andaman') || s.includes('sikkim')) {
+    return '5–7 business days';
+  }
+  return PIN_REGION_DIRECTORY[prefix2]?.estimatedDays || '3–5 business days';
+}
+
 app.get('/api/delhivery/pincode', async (req: Request, res: Response) => {
   try {
     const pin = String(req.query.pin || '').replace(/[^0-9]/g, '').slice(0, 6);
@@ -1051,16 +1141,112 @@ app.get('/api/delhivery/pincode', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, serviceable: false, pincode: pin, message: 'Enter a valid 6-digit pincode.' });
     }
 
+    // Army Postal Service (9xxxxx) and 0xxxxx are not civilian Delhivery courier pins
+    if (pin.startsWith('0') || pin.startsWith('9')) {
+      return res.json({
+        success: true,
+        configured: Boolean(getDelhiveryConfig().token),
+        serviceable: false,
+        pincode: pin,
+        prepaid: false,
+        cod: false,
+        courier: 'Delhivery Express',
+        dispatchHub: 'Hyderabad Facility (502032)',
+        message: pin.startsWith('9')
+          ? `Army Post Office (APO/FPO) pincode ${pin} is not serviceable via Delhivery courier.`
+          : `Pincode ${pin} is not a valid Indian delivery pincode.`,
+      });
+    }
+
     const cfg = getDelhiveryConfig();
     if (!cfg.token) {
+      // Verify real Indian pincode against India Post directory first (fast 2.5s timeout)
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        const postalResp = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        clearTimeout(timer);
+
+        if (postalResp.ok) {
+          const postalData: any = await postalResp.json();
+          const firstEntry = Array.isArray(postalData) ? postalData[0] : null;
+
+          if (firstEntry?.Status === 'Error' || !firstEntry?.PostOffice?.length) {
+            return res.json({
+              success: true,
+              configured: false,
+              serviceable: false,
+              pincode: pin,
+              prepaid: false,
+              cod: false,
+              courier: 'Delhivery Express',
+              dispatchHub: 'Hyderabad Facility (502032)',
+              source: 'india_post_verified',
+              message: `Pincode ${pin} was not found. Delhivery delivery is not available for this pincode.`,
+            });
+          }
+
+          const po = firstEntry.PostOffice[0];
+          const city = po.District || po.Block || po.Division || '';
+          const state = po.State || '';
+          const areaName = po.Name || '';
+          const eta = estimateEtaByPinAndState(pin, state);
+
+          return res.json({
+            success: true,
+            configured: false,
+            serviceable: true,
+            pincode: pin,
+            city,
+            state,
+            areaName,
+            prepaid: true,
+            cod: false,
+            estimatedDays: eta,
+            courier: 'Delhivery Express',
+            dispatchHub: 'Hyderabad Facility (502032)',
+            source: 'india_post_verified',
+            message: `Delhivery Express delivers to ${areaName ? `${areaName}, ` : ''}${city}${state ? `, ${state}` : ''} (${pin}).`,
+          });
+        }
+      } catch {
+        // External lookup timed out; fall back cleanly to regional PIN prefix directory
+      }
+
+      const prefix2 = pin.slice(0, 2);
+      const region = PIN_REGION_DIRECTORY[prefix2];
+      if (!region) {
+        return res.json({
+          success: true,
+          configured: false,
+          serviceable: false,
+          pincode: pin,
+          prepaid: false,
+          cod: false,
+          courier: 'Delhivery Express',
+          dispatchHub: 'Hyderabad Facility (502032)',
+          source: 'pin_directory',
+          message: `Pincode ${pin} is not in an active Indian postal zone for Delhivery delivery.`,
+        });
+      }
+
       return res.json({
-        success: false,
+        success: true,
         configured: false,
         serviceable: true,
         pincode: pin,
+        city: region.city,
+        state: region.state,
         prepaid: true,
         cod: false,
-        message: 'DELHIVERY_API_TOKEN not set yet — standard Delhivery Prepaid coverage assumed.',
+        estimatedDays: region.estimatedDays,
+        courier: 'Delhivery Express',
+        dispatchHub: 'Hyderabad Facility (502032)',
+        source: 'pin_directory',
+        message: `Delhivery Prepaid Express serviceable in ${region.city}, ${region.state} (${pin}).`,
       });
     }
 
@@ -1081,6 +1267,9 @@ app.get('/api/delhivery/pincode', async (req: Request, res: Response) => {
         pincode: pin,
         prepaid: false,
         cod: false,
+        courier: 'Delhivery Express',
+        dispatchHub: 'Hyderabad Facility (502032)',
+        source: 'delhivery_live',
         message: `Pincode ${pin} is currently non-serviceable on Delhivery Express.`,
       });
     }
@@ -1088,19 +1277,25 @@ app.get('/api/delhivery/pincode', async (req: Request, res: Response) => {
     const prepaidOk = String(record.pre_paid || '').toUpperCase() === 'Y';
     const isEmbargo = String(record.remarks || '').toLowerCase().includes('embargo');
     const serviceable = prepaidOk && !isEmbargo;
+    const city = record.city || record.district || PIN_REGION_DIRECTORY[pin.slice(0, 2)]?.city || '';
+    const state = record.state_code || PIN_REGION_DIRECTORY[pin.slice(0, 2)]?.state || '';
+    const eta = estimateEtaByPinAndState(pin, state);
 
     return res.json({
       success: true,
       configured: true,
       serviceable,
       pincode: pin,
-      city: record.city || record.district || '',
-      state: record.state_code || '',
+      city,
+      state,
       prepaid: prepaidOk,
       cod: false, // Store policy: Prepaid & 50% Partial Advance only (no COD)
-      estimatedDays: '2–4 business days',
+      estimatedDays: eta,
+      courier: 'Delhivery Express',
+      dispatchHub: 'Hyderabad Facility (502032)',
+      source: 'delhivery_live',
       message: serviceable
-        ? `Delhivery Prepaid Express serviceable (${record.city || pin})`
+        ? `Delhivery Prepaid Express serviceable (${city || pin})`
         : `Pincode ${pin} has delivery restrictions (${record.remarks || 'Not serviceable'}).`,
     });
   } catch (err: any) {
@@ -1368,6 +1563,770 @@ app.get('/api/delhivery/track', async (req: Request, res: Response) => {
       waybill: String(req.query.waybill || ''),
       scans: [],
       message: err?.message || 'Delhivery tracking lookup failed.',
+    });
+  }
+});
+
+// ==============================================================================
+// 3D. AISENSY WHATSAPP BUSINESS API ROUTES (ORDER CONFIRM/CANCEL & 5% DROP RECOVERY)
+// ==============================================================================
+
+const AISENSY_API_ENDPOINT = 'https://backend.aisensy.com/campaign/t1/api/v2';
+const AISENSY_LEDGER_PATH = path.join(os.tmpdir(), 'teqqno-aisensy-state.json');
+
+interface WhatsAppOrderRecord {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  phone: string;
+  total: number;
+  whatsappActionStatus: 'pending' | 'confirmed' | 'cancelled';
+  confirmUrl: string;
+  cancelUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  actionSource?: string;
+}
+
+interface WhatsAppDispatchLog {
+  id: string;
+  type: 'order_confirmation' | 'checkout_drop_5off' | 'order_action' | 'test';
+  phone: string;
+  customerName: string;
+  campaignName: string;
+  status: 'sent' | 'simulated' | 'failed' | 'action_recorded';
+  orderNumber?: string;
+  couponCode?: string;
+  triggerReason?: string;
+  actionResult?: string;
+  messagePreview: string;
+  createdAt: string;
+}
+
+interface AiSensyLedgerState {
+  orders: Record<string, WhatsAppOrderRecord>;
+  recoverySentSessions: Record<string, { sentAt: number; couponCode: string; expiresAt: number }>;
+  logs: WhatsAppDispatchLog[];
+}
+
+function loadAiSensyLedger(): AiSensyLedgerState {
+  try {
+    if (fs.existsSync(AISENSY_LEDGER_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(AISENSY_LEDGER_PATH, 'utf8'));
+      return {
+        orders: parsed.orders || {},
+        recoverySentSessions: parsed.recoverySentSessions || {},
+        logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+      };
+    }
+  } catch {
+    // ignore corrupt cache
+  }
+  return { orders: {}, recoverySentSessions: {}, logs: [] };
+}
+
+function saveAiSensyLedger(state: AiSensyLedgerState) {
+  try {
+    state.logs = state.logs.slice(0, 100);
+    fs.writeFileSync(AISENSY_LEDGER_PATH, JSON.stringify(state, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[AiSensy Ledger Write Warning]:', err);
+  }
+}
+
+const getAiSensyConfig = () => ({
+  apiKey: (process.env.AISENSY_API_KEY || '').trim(),
+  orderConfirmCampaign: (process.env.AISENSY_ORDER_CONFIRM_CAMPAIGN || 'order_confirmation_action').trim(),
+  checkoutDropCampaign: (process.env.AISENSY_CHECKOUT_DROP_CAMPAIGN || 'checkout_drop_5_off').trim(),
+  webhookSecret: (process.env.AISENSY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || 'teqqno_aisensy_secret_2026').trim(),
+  appBaseUrl: (process.env.APP_BASE_URL || '').trim().replace(/\/$/, ''),
+});
+
+function normalizeWhatsAppPhone(rawPhone?: string | null): string {
+  const digits = String(rawPhone || '').replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.startsWith('0') && digits.length === 11) return `91${digits.slice(1)}`;
+  if (digits.startsWith('91') && digits.length === 12) return digits;
+  return digits;
+}
+
+function createOrderActionToken(orderId: string, action: 'confirm' | 'cancel'): string {
+  const secret = getAiSensyConfig().webhookSecret;
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${orderId}:${action}`)
+    .digest('hex')
+    .slice(0, 24);
+}
+
+function verifyOrderActionToken(orderId: string, action: 'confirm' | 'cancel', token?: string): boolean {
+  if (!token) return false;
+  const expected = createOrderActionToken(orderId, action);
+  const bufA = Buffer.from(expected, 'utf8');
+  const bufB = Buffer.from(String(token), 'utf8');
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
+
+function resolveAppOrigin(req: Request, bodyOrigin?: string): string {
+  const cfgOrigin = getAiSensyConfig().appBaseUrl;
+  if (cfgOrigin) return cfgOrigin;
+  if (bodyOrigin && (bodyOrigin.startsWith('http://') || bodyOrigin.startsWith('https://'))) {
+    return bodyOrigin.replace(/\/$/, '');
+  }
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.get('host') || 'teqqnoworld.com';
+  return `${proto}://${host}`;
+}
+
+async function dispatchAiSensyCampaign(payload: {
+  campaignName: string;
+  destination: string;
+  userName: string;
+  templateParams: string[];
+  source: string;
+  buttons?: any[];
+}): Promise<{ ok: boolean; simulated: boolean; status?: number; raw?: any; errorMessage?: string }> {
+  const cfg = getAiSensyConfig();
+  if (!cfg.apiKey) {
+    return {
+      ok: true,
+      simulated: true,
+      errorMessage: 'AISENSY_API_KEY not configured on server (running in simulation mode).',
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(AISENSY_API_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        apiKey: cfg.apiKey,
+        campaignName: payload.campaignName,
+        destination: payload.destination,
+        userName: payload.userName || 'Valued Customer',
+        templateParams: payload.templateParams,
+        source: payload.source,
+        ...(payload.buttons && payload.buttons.length > 0 ? { buttons: payload.buttons } : {}),
+      }),
+    });
+    clearTimeout(timer);
+
+    const data: any = await resp.json().catch(() => ({}));
+    if (!resp.ok || data?.success === false || data?.status === 'error') {
+      return {
+        ok: false,
+        simulated: false,
+        status: resp.status,
+        raw: data,
+        errorMessage: data?.message || data?.error || `AiSensy API returned status ${resp.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      simulated: false,
+      status: resp.status,
+      raw: data,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      simulated: false,
+      errorMessage: err?.message || 'Unable to reach AiSensy API endpoint.',
+    };
+  }
+}
+
+app.get('/api/aisensy/status', (_req: Request, res: Response) => {
+  const cfg = getAiSensyConfig();
+  const ledger = loadAiSensyLedger();
+  res.json({
+    configured: Boolean(cfg.apiKey),
+    endpoint: AISENSY_API_ENDPOINT,
+    orderConfirmCampaign: cfg.orderConfirmCampaign,
+    checkoutDropCampaign: cfg.checkoutDropCampaign,
+    webhookPath: '/api/aisensy/webhook',
+    recentLogsCount: ledger.logs.length,
+    trackedOrdersCount: Object.keys(ledger.orders).length,
+  });
+});
+
+app.get('/api/aisensy/logs', (_req: Request, res: Response) => {
+  const ledger = loadAiSensyLedger();
+  res.json({
+    success: true,
+    logs: ledger.logs.slice(0, 50),
+    orders: Object.values(ledger.orders).slice(0, 50),
+  });
+});
+
+app.get('/api/aisensy/order-status', (req: Request, res: Response) => {
+  const orderId = String(req.query.orderId || '').trim();
+  const orderNumber = String(req.query.orderNumber || '').trim();
+  const ledger = loadAiSensyLedger();
+  const record =
+    (orderId && ledger.orders[orderId]) ||
+    Object.values(ledger.orders).find((o) => o.orderNumber === orderNumber) ||
+    null;
+
+  if (!record) {
+    return res.json({
+      found: false,
+      whatsappActionStatus: 'pending',
+    });
+  }
+
+  return res.json({
+    found: true,
+    ...record,
+  });
+});
+
+app.post('/api/aisensy/send-order-confirmation', async (req: Request, res: Response) => {
+  try {
+    const {
+      orderId,
+      orderNumber,
+      customerName,
+      phone,
+      total,
+      amountPaid,
+      balanceDue,
+      paymentMode,
+      itemsSummary,
+      shippingCity,
+      originUrl,
+    } = req.body || {};
+
+    const normalizedPhone = normalizeWhatsAppPhone(phone);
+    if (!orderId || !normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Order ID and valid customer WhatsApp number are required.',
+      });
+    }
+
+    const cfg = getAiSensyConfig();
+    const displayOrderNum = String(orderNumber || orderId);
+    const firstName = String(customerName || 'Customer').trim().split(' ')[0] || 'Customer';
+    const baseOrigin = resolveAppOrigin(req, originUrl);
+
+    const confirmToken = createOrderActionToken(String(orderId), 'confirm');
+    const cancelToken = createOrderActionToken(String(orderId), 'cancel');
+    const confirmUrl = `${baseOrigin}/#order-action?action=confirm&orderId=${encodeURIComponent(String(orderId))}&orderNumber=${encodeURIComponent(displayOrderNum)}&token=${confirmToken}`;
+    const cancelUrl = `${baseOrigin}/#order-action?action=cancel&orderId=${encodeURIComponent(String(orderId))}&orderNumber=${encodeURIComponent(displayOrderNum)}&token=${cancelToken}`;
+
+    const formattedTotal = `₹${Math.round(Number(total) || 0).toLocaleString('en-IN')}`;
+    const formattedPaid = `₹${Math.round(Number(amountPaid) || Number(total) || 0).toLocaleString('en-IN')}`;
+    const itemLine = String(itemsSummary || 'Custom Branded Corporate Merchandise').slice(0, 120);
+
+    const previewMessage = [
+      `Namaste ${firstName}! 🙏 Aapka TeqqnoWorld Order #${displayOrderNum} place ho gaya hai!`,
+      `📦 Items: ${itemLine}`,
+      `💰 Order Total: ${formattedTotal} (Paid: ${formattedPaid}${Number(balanceDue) > 0 ? ` · Balance: ₹${Math.round(Number(balanceDue)).toLocaleString('en-IN')}` : ''})`,
+      shippingCity ? `📍 Delivery City: ${shippingCity}` : '',
+      ``,
+      `Kripya apna order status choose karein:`,
+      `✅ Confirm Order: ${confirmUrl}`,
+      `❌ Cancel Order: ${cancelUrl}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const aisensyResp = await dispatchAiSensyCampaign({
+      campaignName: cfg.orderConfirmCampaign,
+      destination: normalizedPhone,
+      userName: String(customerName || firstName),
+      templateParams: [
+        firstName,
+        displayOrderNum,
+        itemLine,
+        formattedTotal,
+        String(paymentMode || 'Prepaid'),
+        confirmUrl,
+        cancelUrl,
+      ],
+      source: 'teqqnoworld-order-confirm',
+    });
+
+    const nowIso = new Date().toISOString();
+    const ledger = loadAiSensyLedger();
+    ledger.orders[String(orderId)] = {
+      orderId: String(orderId),
+      orderNumber: displayOrderNum,
+      customerName: String(customerName || 'Customer'),
+      phone: normalizedPhone,
+      total: Number(total) || 0,
+      whatsappActionStatus: 'pending',
+      confirmUrl,
+      cancelUrl,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    ledger.logs.unshift({
+      id: `wa_ord_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type: 'order_confirmation',
+      phone: normalizedPhone,
+      customerName: String(customerName || firstName),
+      campaignName: cfg.orderConfirmCampaign,
+      status: aisensyResp.simulated ? 'simulated' : aisensyResp.ok ? 'sent' : 'failed',
+      orderNumber: displayOrderNum,
+      messagePreview: previewMessage,
+      createdAt: nowIso,
+    });
+    saveAiSensyLedger(ledger);
+
+    return res.json({
+      success: aisensyResp.ok || aisensyResp.simulated,
+      simulated: aisensyResp.simulated,
+      phone: normalizedPhone,
+      campaignName: cfg.orderConfirmCampaign,
+      confirmUrl,
+      cancelUrl,
+      previewMessage,
+      whatsappActionStatus: 'pending',
+      message: aisensyResp.simulated
+        ? 'WhatsApp order notification prepared in Simulation Mode (add AISENSY_API_KEY in .env to send live).'
+        : aisensyResp.ok
+        ? `Order notification with Confirm/Cancel options sent to +${normalizedPhone} via AiSensy.`
+        : aisensyResp.errorMessage || 'AiSensy dispatch failed.',
+    });
+  } catch (err: any) {
+    console.error('[AiSensy Order Confirmation Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to dispatch AiSensy order notification.',
+    });
+  }
+});
+
+app.post('/api/aisensy/send-checkout-recovery', async (req: Request, res: Response) => {
+  try {
+    const {
+      checkoutSessionId,
+      customerName,
+      phone,
+      cartTotal,
+      couponCode = 'SAVE5NOW',
+      discountPercent = 5,
+      validMinutes = 15,
+      triggerReason = 'checkout_drop',
+      itemsSummary,
+      originUrl,
+    } = req.body || {};
+
+    const normalizedPhone = normalizeWhatsAppPhone(phone);
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid 10-digit WhatsApp phone number is required.',
+      });
+    }
+
+    const sessionKey = `${checkoutSessionId || normalizedPhone}_${normalizedPhone}`;
+    const ledger = loadAiSensyLedger();
+    const existingSent = ledger.recoverySentSessions[sessionKey];
+    const nowMs = Date.now();
+    if (existingSent && nowMs - existingSent.sentAt < 15 * 60 * 1000) {
+      return res.json({
+        success: true,
+        deduplicated: true,
+        simulated: !getAiSensyConfig().apiKey,
+        phone: normalizedPhone,
+        couponCode: existingSent.couponCode,
+        expiresAt: new Date(existingSent.expiresAt).toISOString(),
+        message: '5% OFF limited-time WhatsApp offer already sent for this checkout session.',
+      });
+    }
+
+    const cfg = getAiSensyConfig();
+    const firstName = String(customerName || 'Customer').trim().split(' ')[0] || 'Customer';
+    const baseOrigin = resolveAppOrigin(req, originUrl);
+    const resumeUrl = `${baseOrigin}/#checkout?coupon=${encodeURIComponent(String(couponCode))}&recovery=${encodeURIComponent(String(checkoutSessionId || ''))}`;
+    const numericTotal = Math.round(Number(cartTotal) || 0);
+    const estSavings = Math.max(1, Math.round(numericTotal * (Number(discountPercent) / 100)));
+    const expiresAtMs = nowMs + Number(validMinutes) * 60 * 1000;
+    const itemLine = String(itemsSummary || 'Your Custom TeqqnoWorld Merchandise').slice(0, 100);
+
+    const previewMessage = [
+      `Hi ${firstName}! 👋 Dekha aap TeqqnoWorld Checkout par order complete karte-karte ruk gaye.`,
+      `Koi problem aa rahi hai ya price thoda zyada laga?`,
+      `🎁 Special Limited-Time Offer (${validMinutes} Mins Valid): Extra *${discountPercent}% OFF*!`,
+      `🏷️ Coupon Code: *${couponCode}* (Extra ₹${estSavings.toLocaleString('en-IN')} bachat on ₹${numericTotal.toLocaleString('en-IN')})`,
+      `🛒 Complete Order Now: ${resumeUrl}`,
+    ].join('\n');
+
+    const aisensyResp = await dispatchAiSensyCampaign({
+      campaignName: cfg.checkoutDropCampaign,
+      destination: normalizedPhone,
+      userName: String(customerName || firstName),
+      templateParams: [
+        firstName,
+        itemLine,
+        `₹${numericTotal.toLocaleString('en-IN')}`,
+        `${discountPercent}% OFF`,
+        String(couponCode),
+        `${validMinutes} mins`,
+        resumeUrl,
+      ],
+      source: `teqqnoworld-${triggerReason}`,
+    });
+
+    const nowIso = new Date().toISOString();
+    ledger.recoverySentSessions[sessionKey] = {
+      sentAt: nowMs,
+      couponCode: String(couponCode),
+      expiresAt: expiresAtMs,
+    };
+
+    ledger.logs.unshift({
+      id: `wa_drop_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+      type: 'checkout_drop_5off',
+      phone: normalizedPhone,
+      customerName: String(customerName || firstName),
+      campaignName: cfg.checkoutDropCampaign,
+      status: aisensyResp.simulated ? 'simulated' : aisensyResp.ok ? 'sent' : 'failed',
+      couponCode: String(couponCode),
+      triggerReason: String(triggerReason),
+      messagePreview: previewMessage,
+      createdAt: nowIso,
+    });
+    saveAiSensyLedger(ledger);
+
+    return res.json({
+      success: aisensyResp.ok || aisensyResp.simulated,
+      simulated: aisensyResp.simulated,
+      phone: normalizedPhone,
+      campaignName: cfg.checkoutDropCampaign,
+      couponCode: String(couponCode),
+      discountPercent: Number(discountPercent),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      resumeUrl,
+      previewMessage,
+      message: aisensyResp.simulated
+        ? `5% OFF limited-time WhatsApp message (${couponCode}) prepared in Simulation Mode.`
+        : aisensyResp.ok
+        ? `Limited-time 5% OFF coupon (${couponCode}) sent on WhatsApp (+${normalizedPhone}) via AiSensy!`
+        : aisensyResp.errorMessage || 'AiSensy recovery dispatch failed.',
+    });
+  } catch (err: any) {
+    console.error('[AiSensy Checkout Recovery Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to send 5% OFF WhatsApp recovery notification.',
+    });
+  }
+});
+
+async function notifyAdminOrderActionEmail(record: WhatsAppOrderRecord, action: 'confirmed' | 'cancelled', source: string) {
+  try {
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+    if (!transporter) return;
+    await transporter.sendMail({
+      from: `"TeqqnoWorld WhatsApp Alerts" <${cfg.smtpUser}>`,
+      to: cfg.adminEmailList.join(', '),
+      subject: `[WhatsApp ${action === 'confirmed' ? 'CONFIRMED' : 'CANCELLED'}] Order #${record.orderNumber} - ${record.customerName}`,
+      html: `<div style="font-family:sans-serif;padding:20px;background:#16171B;color:#fff;border-radius:12px;border:1px solid ${action === 'confirmed' ? '#1EBE5D' : '#EF4444'};">
+        <h2 style="color:${action === 'confirmed' ? '#1EBE5D' : '#EF4444'};margin-top:0;">Customer ${action.toUpperCase()} Order via WhatsApp</h2>
+        <p><strong>Order:</strong> #${escapeHtml(record.orderNumber)}<br/>
+        <strong>Customer:</strong> ${escapeHtml(record.customerName)} (+${escapeHtml(record.phone)})<br/>
+        <strong>Order Value:</strong> ₹${Number(record.total || 0).toLocaleString('en-IN')}<br/>
+        <strong>Source:</strong> ${escapeHtml(source)}</p>
+      </div>`,
+    });
+  } catch (err) {
+    console.warn('[WhatsApp Order Action Admin Email Warning]:', err);
+  }
+}
+
+app.post('/api/aisensy/order-action', async (req: Request, res: Response) => {
+  try {
+    const { orderId, orderNumber, action, token, source = 'whatsapp_link' } = req.body || {};
+    const cleanAction = action === 'cancel' || action === 'cancelled' ? 'cancel' : action === 'confirm' || action === 'confirmed' ? 'confirm' : null;
+    if (!cleanAction || (!orderId && !orderNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid action (confirm/cancel) and orderId or orderNumber are required.',
+      });
+    }
+
+    const ledger = loadAiSensyLedger();
+    let record =
+      (orderId && ledger.orders[String(orderId)]) ||
+      Object.values(ledger.orders).find((o) => o.orderNumber === String(orderNumber)) ||
+      null;
+
+    // Validate token when token is supplied for an existing orderId
+    if (token && record && !verifyOrderActionToken(record.orderId, cleanAction, String(token))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or expired WhatsApp order action token.',
+      });
+    }
+
+    const targetStatus: 'confirmed' | 'cancelled' = cleanAction === 'confirm' ? 'confirmed' : 'cancelled';
+    const nowIso = new Date().toISOString();
+
+    if (!record) {
+      const resolvedId = String(orderId || orderNumber);
+      record = {
+        orderId: resolvedId,
+        orderNumber: String(orderNumber || resolvedId),
+        customerName: 'Customer',
+        phone: '',
+        total: 0,
+        whatsappActionStatus: targetStatus,
+        confirmUrl: '',
+        cancelUrl: '',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        actionSource: String(source),
+      };
+      ledger.orders[resolvedId] = record;
+    } else {
+      record.whatsappActionStatus = targetStatus;
+      record.updatedAt = nowIso;
+      record.actionSource = String(source);
+    }
+
+    ledger.logs.unshift({
+      id: `wa_act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type: 'order_action',
+      phone: record.phone || 'Storefront',
+      customerName: record.customerName,
+      campaignName: 'whatsapp_order_response',
+      status: 'action_recorded',
+      orderNumber: record.orderNumber,
+      actionResult: targetStatus.toUpperCase(),
+      messagePreview: `Customer ${targetStatus === 'confirmed' ? 'CONFIRMED ✅' : 'CANCELLED ❌'} Order #${record.orderNumber} via ${source}.`,
+      createdAt: nowIso,
+    });
+    saveAiSensyLedger(ledger);
+
+    void notifyAdminOrderActionEmail(record, targetStatus, String(source));
+
+    return res.json({
+      success: true,
+      orderId: record.orderId,
+      orderNumber: record.orderNumber,
+      whatsappActionStatus: targetStatus,
+      updatedAt: nowIso,
+      message:
+        targetStatus === 'confirmed'
+          ? `Order #${record.orderNumber} confirmed! Production & proof verification queued.`
+          : `Order #${record.orderNumber} has been marked cancelled per your WhatsApp request.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Unable to process WhatsApp order action.',
+    });
+  }
+});
+
+// AiSensy Incoming Webhook for Quick Reply Buttons ("Confirm Order" / "Cancel Order")
+app.post('/api/aisensy/webhook', async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const rawSender =
+      body.phone_number ||
+      body.destination ||
+      body.sender ||
+      body.from ||
+      body?.data?.customer?.phone_number ||
+      body?.contact?.phone_number ||
+      '';
+    const normalizedPhone = normalizeWhatsAppPhone(rawSender);
+
+    const buttonPayload = String(
+      body.payload ||
+        body.button_payload ||
+        body?.button?.payload ||
+        body?.data?.message?.button_reply?.id ||
+        body?.message?.button?.payload ||
+        ''
+    ).trim();
+
+    const textMessage = String(
+      body.message_content ||
+        body.text ||
+        body.button_text ||
+        body?.button?.text ||
+        body?.data?.message?.text?.body ||
+        body?.data?.message?.button_reply?.title ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+
+    let detectedAction: 'confirmed' | 'cancelled' | null = null;
+    let payloadOrderId = '';
+
+    if (buttonPayload.toUpperCase().startsWith('CONFIRM_ORDER:')) {
+      detectedAction = 'confirmed';
+      payloadOrderId = buttonPayload.split(':')[1] || '';
+    } else if (buttonPayload.toUpperCase().startsWith('CANCEL_ORDER:')) {
+      detectedAction = 'cancelled';
+      payloadOrderId = buttonPayload.split(':')[1] || '';
+    } else if (
+      textMessage.includes('confirm') ||
+      textMessage === 'yes' ||
+      textMessage === '1' ||
+      textMessage.includes('ha')
+    ) {
+      detectedAction = 'confirmed';
+    } else if (
+      textMessage.includes('cancel') ||
+      textMessage === 'no' ||
+      textMessage === '2' ||
+      textMessage.includes('nahi')
+    ) {
+      detectedAction = 'cancelled';
+    }
+
+    if (!detectedAction) {
+      return res.json({
+        success: true,
+        ignored: true,
+        message: 'Webhook received (no confirm/cancel order intent matched).',
+      });
+    }
+
+    const ledger = loadAiSensyLedger();
+    let matchedOrder: WhatsAppOrderRecord | undefined =
+      (payloadOrderId && ledger.orders[payloadOrderId]) || undefined;
+
+    if (!matchedOrder && normalizedPhone) {
+      const candidates = Object.values(ledger.orders)
+        .filter((o) => o.phone === normalizedPhone)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      matchedOrder = candidates[0];
+    }
+
+    const nowIso = new Date().toISOString();
+    if (matchedOrder) {
+      matchedOrder.whatsappActionStatus = detectedAction;
+      matchedOrder.updatedAt = nowIso;
+      matchedOrder.actionSource = 'aisensy_webhook';
+      ledger.logs.unshift({
+        id: `wa_wh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'order_action',
+        phone: matchedOrder.phone || normalizedPhone,
+        customerName: matchedOrder.customerName,
+        campaignName: 'aisensy_webhook',
+        status: 'action_recorded',
+        orderNumber: matchedOrder.orderNumber,
+        actionResult: detectedAction.toUpperCase(),
+        messagePreview: `AiSensy Webhook: Customer replied "${textMessage || buttonPayload}" -> Order #${matchedOrder.orderNumber} ${detectedAction.toUpperCase()}.`,
+        createdAt: nowIso,
+      });
+      saveAiSensyLedger(ledger);
+      void notifyAdminOrderActionEmail(matchedOrder, detectedAction, 'aisensy_webhook');
+    }
+
+    return res.json({
+      success: true,
+      matchedOrderId: matchedOrder?.orderId || null,
+      orderNumber: matchedOrder?.orderNumber || null,
+      whatsappActionStatus: detectedAction,
+    });
+  } catch (err: any) {
+    console.error('[AiSensy Webhook Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Webhook processing error.',
+    });
+  }
+});
+
+app.post('/api/aisensy/test', async (req: Request, res: Response) => {
+  try {
+    const cfg = getAiSensyConfig();
+    const cleanPhone = normalizeWhatsAppPhone(req.body?.phone);
+    if (!cleanPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid 10-digit WhatsApp number to send a test message.',
+      });
+    }
+
+    const testType = req.body?.testType === 'checkout_drop_5off' ? 'checkout_drop_5off' : 'order_confirmation';
+    const campaignName = String(
+      req.body?.campaignName ||
+        (testType === 'checkout_drop_5off' ? cfg.checkoutDropCampaign : cfg.orderConfirmCampaign)
+    );
+    const baseOrigin = resolveAppOrigin(req, req.body?.originUrl);
+
+    const isDropTest = testType === 'checkout_drop_5off';
+    const previewMessage = isDropTest
+      ? `TeqqnoWorld 5% OFF Test: Hi Test Customer! Special 5% OFF (Code: SAVE5NOW, 15 mins valid) -> ${baseOrigin}/#checkout?coupon=SAVE5NOW`
+      : `TeqqnoWorld AiSensy Test: Order #TQ-TEST99 confirmed! Confirm: ${baseOrigin}/#order-action?action=confirm&orderId=TQ-TEST99 | Cancel: ${baseOrigin}/#order-action?action=cancel&orderId=TQ-TEST99`;
+
+    const templateParams = isDropTest
+      ? [
+          'Test Customer',
+          '230 GSM Custom Corporate Polo (10 pcs)',
+          '₹5,400',
+          '5% OFF',
+          'SAVE5NOW',
+          '15 mins',
+          `${baseOrigin}/#checkout?coupon=SAVE5NOW`,
+        ]
+      : [
+          'Test Customer',
+          'TQ-TEST99',
+          '230 GSM Custom Corporate Polo (10 pcs)',
+          '₹5,400',
+          'Full Prepaid',
+          `${baseOrigin}/#order-action?action=confirm&orderId=TQ-TEST99`,
+          `${baseOrigin}/#order-action?action=cancel&orderId=TQ-TEST99`,
+        ];
+
+    const resp = await dispatchAiSensyCampaign({
+      campaignName,
+      destination: cleanPhone,
+      userName: 'TeqqnoWorld Test',
+      templateParams,
+      source: isDropTest ? 'teqqnoworld-admin-drop-test' : 'teqqnoworld-admin-test',
+    });
+
+    const ledger = loadAiSensyLedger();
+    ledger.logs.unshift({
+      id: `wa_test_${Date.now()}`,
+      type: isDropTest ? 'checkout_drop_5off' : 'test',
+      phone: cleanPhone,
+      customerName: 'Admin Test',
+      campaignName,
+      couponCode: isDropTest ? 'SAVE5NOW' : undefined,
+      status: resp.simulated ? 'simulated' : resp.ok ? 'sent' : 'failed',
+      messagePreview: previewMessage,
+      createdAt: new Date().toISOString(),
+    });
+    saveAiSensyLedger(ledger);
+
+    return res.json({
+      success: resp.ok || resp.simulated,
+      simulated: resp.simulated,
+      phone: cleanPhone,
+      message: resp.simulated
+        ? `Simulation Ready for +${cleanPhone} (Campaign: ${campaignName}). Set AISENSY_API_KEY in .env to fire live WhatsApp messages.`
+        : resp.ok
+        ? `Live AiSensy WhatsApp test dispatched to +${cleanPhone} (Campaign: ${campaignName})!`
+        : resp.errorMessage || 'AiSensy test call failed.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'AiSensy test request failed.',
     });
   }
 });

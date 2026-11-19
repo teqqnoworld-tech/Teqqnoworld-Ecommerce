@@ -1,6 +1,14 @@
-import React, { useState } from 'react';
-import { X, Trash2, ShoppingBag, ArrowRight, ShieldCheck, Tag, Plus, Minus } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Trash2, ShoppingBag, ArrowRight, ShieldCheck, Tag, Plus, Minus, Truck, Clock } from 'lucide-react';
 import { CartItem } from '../types';
+import { DelhiveryPincodeCheckResult } from '../services/paymentAndLogisticsService';
+import { getSavedDelhiveryCheck, subscribeDelhiveryCheck } from '../services/delhiveryPincodeStore';
+import {
+  ActiveRecoveryCoupon,
+  formatRemainingCountdown,
+  getActiveRecoveryCoupon,
+  subscribeRecoveryCoupon,
+} from '../services/aisensyService';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -9,6 +17,7 @@ interface CartDrawerProps {
   onUpdateQuantity: (id: string, delta: number) => void;
   onRemoveItem: (id: string) => void;
   onProceedToCheckout: () => void;
+  onOpenDeliveryCheck?: () => void;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
@@ -18,6 +27,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onUpdateQuantity,
   onRemoveItem,
   onProceedToCheckout,
+  onOpenDeliveryCheck,
 }) => {
   const [couponCode, setCouponCode] = useState(() => {
     try {
@@ -34,16 +44,68 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     }
   });
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
+  const [recoveryCoupon, setRecoveryCoupon] = useState<ActiveRecoveryCoupon | null>(() =>
+    getActiveRecoveryCoupon()
+  );
+  const [recoveryCountdown, setRecoveryCountdown] = useState<string>(() => {
+    const active = getActiveRecoveryCoupon();
+    return active ? formatRemainingCountdown(active.expiresAt) : '';
+  });
+  const [savedDelivery, setSavedDelivery] = useState<DelhiveryPincodeCheckResult | null>(() =>
+    getSavedDelhiveryCheck()
+  );
+
+  useEffect(() => {
+    return subscribeDelhiveryCheck(setSavedDelivery);
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeRecoveryCoupon((next) => {
+      setRecoveryCoupon(next);
+      try {
+        const applied = sessionStorage.getItem('teqqno_applied_coupon');
+        setAppliedCode(applied || null);
+        if (applied) setCouponCode(applied);
+      } catch {}
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!recoveryCoupon) {
+      setRecoveryCountdown('');
+      return;
+    }
+    const tick = () => {
+      const fresh = getActiveRecoveryCoupon();
+      if (!fresh) {
+        setRecoveryCoupon(null);
+        setRecoveryCountdown('');
+        if (appliedCode === 'SAVE5NOW' || appliedCode === 'TEQQNO5') {
+          setAppliedCode(null);
+          setCouponMessage('5% OFF limited-time coupon expired.');
+        }
+        return;
+      }
+      setRecoveryCountdown(formatRemainingCountdown(fresh.expiresAt));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [recoveryCoupon, appliedCode]);
 
   if (!isOpen) return null;
 
   const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const isRecovery5Active = Boolean(getActiveRecoveryCoupon());
   const couponDiscount =
     appliedCode === 'WELCOME10' || appliedCode === 'TEQQNO10'
       ? Math.round(subtotal * 0.1)
-      : appliedCode === 'TEQQNOBULK'
-        ? Math.min(subtotal, 500)
-        : 0;
+      : (appliedCode === 'SAVE5NOW' || appliedCode === 'TEQQNO5') && isRecovery5Active
+        ? Math.round(subtotal * 0.05)
+        : appliedCode === 'TEQQNOBULK'
+          ? Math.min(subtotal, 500)
+          : 0;
   const freeShippingThreshold = 1999;
   const shippingFee = subtotal >= freeShippingThreshold || subtotal === 0 ? 0 : 149;
   const gstAmount = Math.round(Math.max(0, subtotal - couponDiscount) * 0.18);
@@ -60,6 +122,19 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         sessionStorage.setItem('teqqno_applied_coupon', normalized);
       } catch {}
       setCouponMessage(`🎉 First Order 10% OFF applied! Saved ₹${discount.toLocaleString('en-IN')}`);
+    } else if (code === 'SAVE5NOW' || code === 'TEQQNO5') {
+      const active = getActiveRecoveryCoupon();
+      if (!active) {
+        setCouponMessage('Limited-time 5% OFF voucher has expired or unlocks only at checkout.');
+        return;
+      }
+      const discount = Math.round(subtotal * 0.05);
+      setAppliedCode('SAVE5NOW');
+      setCouponCode('SAVE5NOW');
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', 'SAVE5NOW');
+      } catch {}
+      setCouponMessage(`⚡ Limited-Time 5% OFF applied! Saved ₹${discount.toLocaleString('en-IN')}`);
     } else if (code === 'TEQQNOBULK') {
       const discount = Math.min(subtotal, 500);
       setAppliedCode('TEQQNOBULK');
@@ -309,7 +384,29 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   </button>
                 </form>
 
-                {!appliedCode && (
+                {recoveryCoupon && recoveryCountdown && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-[#FF7A00]/45 text-[11px] text-[#071B35]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Clock className="w-3.5 h-3.5 text-[#FF7A00] shrink-0" />
+                      <span className="truncate font-semibold">
+                        5% OFF ({recoveryCoupon.code}) · {recoveryCountdown} left
+                      </span>
+                    </div>
+                    {appliedCode !== 'SAVE5NOW' ? (
+                      <button
+                        type="button"
+                        onClick={() => applyCodeValue('SAVE5NOW')}
+                        className="font-mono font-bold text-[#FF7A00] hover:underline shrink-0 cursor-pointer"
+                      >
+                        Apply 5% →
+                      </button>
+                    ) : (
+                      <span className="font-mono font-bold text-emerald-700 shrink-0">ACTIVE</span>
+                    )}
+                  </div>
+                )}
+
+                {!appliedCode && !recoveryCoupon && (
                   <button
                     type="button"
                     onClick={() => applyCodeValue('WELCOME10')}
@@ -338,7 +435,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </div>
                 {couponDiscount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-medium">
-                    <span>Discount:</span>
+                    <span>
+                      Discount ({appliedCode}
+                      {appliedCode === 'SAVE5NOW' || appliedCode === 'TEQQNO5' ? ' · 5% OFF' : appliedCode === 'TEQQNOBULK' ? '' : ' · 10% OFF'}):
+                    </span>
                     <span className="font-mono">-₹{couponDiscount.toLocaleString('en-IN')}</span>
                   </div>
                 )}
@@ -356,6 +456,27 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <span>Total Amount:</span>
                   <span className="text-[#FF7A00]">₹{total.toLocaleString('en-IN')}</span>
                 </div>
+              </div>
+
+              {/* Delhivery Pincode Serviceability Line */}
+              <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-white border border-zinc-200 text-[11px]">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Truck className={`w-3.5 h-3.5 shrink-0 ${savedDelivery?.serviceable ? 'text-emerald-600' : 'text-[#FF7A00]'}`} />
+                  <span className="truncate text-zinc-700 font-medium">
+                    {savedDelivery?.serviceable
+                      ? `Delhivery · ${savedDelivery.city || savedDelivery.pincode} (${savedDelivery.estimatedDays || '2–4 days'})`
+                      : 'Check Delhivery availability in your area'}
+                  </span>
+                </div>
+                {onOpenDeliveryCheck && (
+                  <button
+                    type="button"
+                    onClick={onOpenDeliveryCheck}
+                    className="text-[#FF7A00] hover:underline font-semibold shrink-0 cursor-pointer"
+                  >
+                    {savedDelivery?.serviceable ? 'Change' : 'Check PIN'}
+                  </button>
+                )}
               </div>
 
               {/* Checkout Action */}

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, ShoppingBag, Heart, User, Clock, Menu, X, ChevronDown, ShieldCheck, ShieldAlert, LogOut, Package, Truck, Receipt } from 'lucide-react';
+import { Search, ShoppingBag, Heart, User, Clock, Menu, X, ChevronDown, ShieldCheck, ShieldAlert, LogOut, Package, Truck, Receipt, MapPin } from 'lucide-react';
 import { UserProfile } from '../types';
 import { BUSINESS_CONFIG, getWhatsAppLink } from '../config/business';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { SOCIAL_CHANNELS } from './SocialMediaIcons';
+import { DelhiveryPincodeCheckResult } from '../services/paymentAndLogisticsService';
+import { getSavedDelhiveryCheck, subscribeDelhiveryCheck } from '../services/delhiveryPincodeStore';
 
 interface NavbarProps {
   currentTab: string;
@@ -22,6 +24,7 @@ interface NavbarProps {
   onOpenDownloadCatalog?: () => void;
   onOpenTracking?: () => void;
   onOpenAppointment?: () => void;
+  onOpenDeliveryCheck?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -41,9 +44,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenDownloadCatalog,
   onOpenTracking,
   onOpenAppointment,
+  onOpenDeliveryCheck,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [savedDelivery, setSavedDelivery] = useState<DelhiveryPincodeCheckResult | null>(() =>
+    getSavedDelhiveryCheck()
+  );
+
+  useEffect(() => {
+    return subscribeDelhiveryCheck(setSavedDelivery);
+  }, []);
 
   // Global Cmd+K / Ctrl+K shortcut to open search
   useEffect(() => {
@@ -439,10 +450,28 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             </nav>
 
-            {/* Right Dispatch Reassurance */}
-            <div className="hidden lg:flex items-center gap-1.5 text-zinc-500 font-mono text-[11px] shrink-0 pl-4">
-              <Clock className="w-3.5 h-3.5 text-[#FF7A00]" />
-              <span className="font-medium text-zinc-700">24–48h Fast Dispatch</span>
+            {/* Right Dispatch & Delhivery Area Check */}
+            <div className="hidden lg:flex items-center gap-3 shrink-0 pl-4">
+              {onOpenDeliveryCheck ? (
+                <button
+                  type="button"
+                  onClick={onOpenDeliveryCheck}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-200 bg-zinc-50 hover:border-[#FF7A00]/50 hover:bg-orange-50/60 text-zinc-700 font-mono text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  title="Check Delhivery delivery availability in your area"
+                >
+                  <MapPin className={`w-3.5 h-3.5 shrink-0 ${savedDelivery?.serviceable ? 'text-emerald-600' : 'text-[#FF7A00]'}`} />
+                  <span className="font-semibold text-[#071B35]">
+                    {savedDelivery?.serviceable
+                      ? `Delhivery · ${savedDelivery.pincode}${savedDelivery.city ? ` (${savedDelivery.city})` : ''}`
+                      : 'Check Delhivery Area'}
+                  </span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-1.5 text-zinc-500 font-mono text-[11px]">
+                  <Clock className="w-3.5 h-3.5 text-[#FF7A00]" />
+                  <span className="font-medium text-zinc-700">24–48h Fast Dispatch</span>
+                </div>
+              )}
             </div>
 
           </div>
@@ -554,6 +583,29 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                   <span className="text-[10px] bg-[#0B0B0D] text-white px-2 py-0.5 rounded-full font-mono font-bold tabular-nums">
                     {wishlistCount}
+                  </span>
+                </button>
+              )}
+
+              {onOpenDeliveryCheck && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenDeliveryCheck();
+                  }}
+                  className="text-left px-3.5 py-3 rounded-xl bg-zinc-50 hover:bg-orange-50 border border-zinc-200/80 text-zinc-900 font-semibold flex items-center justify-between min-h-[44px] cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MapPin className={`w-4 h-4 shrink-0 ${savedDelivery?.serviceable ? 'text-emerald-600' : 'text-[#FF7A00]'}`} />
+                    <span className="truncate">
+                      {savedDelivery?.serviceable
+                        ? `Delhivery Available (${savedDelivery.pincode})`
+                        : 'Check Delhivery Area'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono text-[#FF7A00] font-semibold shrink-0 ml-2">
+                    {savedDelivery?.serviceable ? 'Change' : 'Check PIN'}
                   </span>
                 </button>
               )}

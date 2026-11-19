@@ -13,12 +13,19 @@ import {
   ArrowRight,
   AlertCircle,
   Loader2,
-  MapPin
+  MapPin,
+  XCircle,
+  RefreshCw
 } from 'lucide-react';
 import { Order } from '../types';
 import { ProductMockupCanvas } from './ProductMockupCanvas';
 import { generateOrderTaxInvoicePdf } from '../utils/pdfGenerator';
 import { trackDelhiveryWaybill, DelhiveryTrackResponse } from '../services/paymentAndLogisticsService';
+import {
+  getWhatsAppOrderActionStatus,
+  submitWhatsAppOrderAction,
+} from '../services/aisensyService';
+import { WhatsAppIcon } from './WhatsAppIcon';
 
 interface OrderConfirmationViewProps {
   order: Order;
@@ -39,6 +46,44 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
   const [proofView, setProofView] = useState<'front' | 'back'>('front');
   const [liveTrackData, setLiveTrackData] = useState<DelhiveryTrackResponse | null>(null);
   const [isTrackingShipment, setIsTrackingShipment] = useState(false);
+  const [waActionStatus, setWaActionStatus] = useState<'pending' | 'confirmed' | 'cancelled'>(
+    order.whatsappActionStatus || 'pending'
+  );
+  const [waActionLoading, setWaActionLoading] = useState(false);
+  const [showWaPreview, setShowWaPreview] = useState(false);
+
+  React.useEffect(() => {
+    setWaActionStatus(order.whatsappActionStatus || 'pending');
+    getWhatsAppOrderActionStatus(order.id, order.orderNumber)
+      .then((res) => {
+        if (res.found && res.whatsappActionStatus) {
+          setWaActionStatus(res.whatsappActionStatus);
+        }
+      })
+      .catch(() => {});
+  }, [order.id, order.orderNumber, order.whatsappActionStatus]);
+
+  const handleTriggerWaAction = async (action: 'confirm' | 'cancel') => {
+    setWaActionLoading(true);
+    try {
+      const res = await submitWhatsAppOrderAction({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        action,
+        source: 'order_confirmation_card',
+      });
+      if (res.success && res.whatsappActionStatus) {
+        setWaActionStatus(res.whatsappActionStatus);
+        onUpdateOrder({
+          ...order,
+          whatsappActionStatus: res.whatsappActionStatus,
+          orderStatus: res.whatsappActionStatus === 'confirmed' ? 'Confirmed' : order.orderStatus,
+        });
+      }
+    } finally {
+      setWaActionLoading(false);
+    }
+  };
 
   const handleLiveTrack = async () => {
     const awb = order.trackingNumber?.trim();
@@ -139,6 +184,96 @@ export const OrderConfirmationView: React.FC<OrderConfirmationViewProps> = ({
               Back to Catalog
             </button>
           </div>
+        </div>
+
+        {/* AiSensy WhatsApp Order Alert & Customer Confirm / Cancel Card */}
+        <div className="bg-white rounded-2xl border border-[#E5E5EA] p-5 sm:p-6 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#1EBE5D]/15 border border-[#1EBE5D]/30 text-[#1EBE5D] flex items-center justify-center shrink-0">
+                <WhatsAppIcon className="w-5 h-5 text-[#1EBE5D]" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-display font-bold text-sm sm:text-base text-[#071B35]">
+                    WhatsApp Order Notification (AiSensy)
+                  </h2>
+                  <span
+                    className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
+                      waActionStatus === 'confirmed'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : waActionStatus === 'cancelled'
+                          ? 'bg-red-50 text-red-700 border-red-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
+                  >
+                    {waActionStatus === 'confirmed'
+                      ? 'CONFIRMED BY CUSTOMER'
+                      : waActionStatus === 'cancelled'
+                        ? 'CANCELLED VIA WHATSAPP'
+                        : 'CONFIRM / CANCEL SENT'}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-600 mt-0.5">
+                  {order.whatsappNotification?.status === 'sent'
+                    ? `WhatsApp notification sent to ${order.whatsappNotification.phone || order.shippingAddress.phone} with Confirm & Cancel options.`
+                    : `WhatsApp alert ready for ${order.whatsappNotification?.phone || order.shippingAddress.phone} with Confirm & Cancel Order options.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {waActionStatus === 'pending' && (
+                <>
+                  <button
+                    type="button"
+                    disabled={waActionLoading}
+                    onClick={() => void handleTriggerWaAction('confirm')}
+                    className="px-3.5 py-2 rounded-xl bg-[#1EBE5D] hover:bg-[#19a851] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirm Order</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={waActionLoading}
+                    onClick={() => void handleTriggerWaAction('cancel')}
+                    className="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    <span>Cancel Order</span>
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  const fresh = await getWhatsAppOrderActionStatus(order.id, order.orderNumber);
+                  if (fresh.found) setWaActionStatus(fresh.whatsappActionStatus);
+                }}
+                className="px-3 py-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                title="Refresh WhatsApp status"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Sync</span>
+              </button>
+              {order.whatsappNotification?.previewMessage && (
+                <button
+                  type="button"
+                  onClick={() => setShowWaPreview((v) => !v)}
+                  className="px-3 py-2 rounded-xl border border-zinc-200 text-zinc-700 hover:border-[#FF7A00] text-xs font-medium cursor-pointer"
+                >
+                  {showWaPreview ? 'Hide Message' : 'View WhatsApp Msg'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showWaPreview && order.whatsappNotification?.previewMessage && (
+            <div className="rounded-xl bg-[#0B141A] text-[#E9EDEF] p-4 text-xs font-sans whitespace-pre-line border border-zinc-800 leading-relaxed">
+              {order.whatsappNotification.previewMessage}
+            </div>
+          )}
         </div>
 
         {/* 1:1 Scale Pre-Press Proof Approval Studio Card */}

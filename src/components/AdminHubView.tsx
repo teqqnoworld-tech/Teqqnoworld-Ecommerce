@@ -80,6 +80,13 @@ import {
   DelhiveryTrackResponse,
   DelhiveryPincodeCheckResult,
 } from '../services/paymentAndLogisticsService';
+import {
+  getAiSensyStatus,
+  getAiSensyLogs,
+  testAiSensyConnection,
+  AiSensyStatusResponse,
+  WhatsAppDispatchLogItem,
+} from '../services/aisensyService';
 import { generateAdminOrderInvoicePdf } from '../utils/pdfGenerator';
 import { getDirectClientWhatsAppUrl } from '../utils/whatsapp';
 import { PRODUCTS } from '../data/mockData';
@@ -169,6 +176,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setTimeout(() => setToast(null), 4000);
   };
 
+  useEffect(() => {
+    const onAdminToast = (e: Event) => {
+      const detail = (e as CustomEvent<{ type?: 'success' | 'error'; message?: string }>).detail;
+      if (detail?.message) {
+        showToast(detail.type === 'error' ? 'error' : 'success', detail.message);
+      }
+    };
+    window.addEventListener('teqqno:admin-toast', onAdminToast);
+    return () => window.removeEventListener('teqqno:admin-toast', onAdminToast);
+  }, []);
+
   // Order Inspector Drawer & Modals
   const [inspectingOrder, setInspectingOrder] = useState<CustomOrderRow | null>(null);
   const [previewLogoUrl, setPreviewLogoUrl] = useState<string | null>(null);
@@ -211,6 +229,11 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [smtpStatus, setSmtpStatus] = useState<SmtpStatusResponse | null>(null);
   const [razorpayStatus, setRazorpayStatus] = useState<RazorpayStatus | null>(null);
   const [delhiveryStatus, setDelhiveryStatus] = useState<DelhiveryStatus | null>(null);
+  const [aisensyStatus, setAiSensyStatus] = useState<AiSensyStatusResponse | null>(null);
+  const [aisensyLogs, setAiSensyLogs] = useState<WhatsAppDispatchLogItem[]>([]);
+  const [testWaPhone, setTestWaPhone] = useState<string>('');
+  const [testingAiSensy, setTestingAiSensy] = useState<boolean>(false);
+  const [aisensyTestResult, setAiSensyTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testEmailInput, setTestEmailInput] = useState<string>('teqqnoworld@gmail.com');
   const [testingSmtp, setTestingSmtp] = useState<boolean>(false);
   const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -234,13 +257,15 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     setLoadingOrders(true);
     setLoadingLeads(true);
     try {
-      const [ordersRes, leadsRes, prodRes, smtpRes, rzpRes, dlvRes] = await Promise.all([
+      const [ordersRes, leadsRes, prodRes, smtpRes, rzpRes, dlvRes, waStatusRes, waLogsRes] = await Promise.all([
         fetchCustomOrdersFromSupabase(),
         fetchAbandonedCheckoutsFromSupabase(),
         fetchProductsFromSupabase(),
         getSmtpStatus(),
         getRazorpayStatus(),
         getDelhiveryStatus(),
+        getAiSensyStatus(),
+        getAiSensyLogs(),
       ]);
       const loadedOrders = ordersRes.data || [];
       setOrders(loadedOrders);
@@ -249,6 +274,8 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       setSmtpStatus(smtpRes);
       setRazorpayStatus(rzpRes);
       setDelhiveryStatus(dlvRes);
+      setAiSensyStatus(waStatusRes);
+      setAiSensyLogs(waLogsRes.logs || []);
       setPickupPkgCount(Math.max(1, loadedOrders.filter((o) => o.status === 'dispatched').length || 1));
     } catch (err) {
       console.error('[AdminHub Load Error]:', err);
@@ -2568,6 +2595,29 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               smtpStatus={smtpStatus}
               razorpayStatus={razorpayStatus}
               delhiveryStatus={delhiveryStatus}
+              aisensyStatus={aisensyStatus}
+              aisensyLogs={aisensyLogs}
+              testWaPhone={testWaPhone}
+              setTestWaPhone={setTestWaPhone}
+              testingAiSensy={testingAiSensy}
+              aisensyTestResult={aisensyTestResult}
+              onTestAiSensy={async (testType = 'order_confirmation') => {
+                setTestingAiSensy(true);
+                setAiSensyTestResult(null);
+                try {
+                  const res = await testAiSensyConnection(testWaPhone, testType);
+                  setAiSensyTestResult({ success: res.success, message: res.message });
+                  const logsRes = await getAiSensyLogs();
+                  setAiSensyLogs(logsRes.logs || []);
+                } finally {
+                  setTestingAiSensy(false);
+                }
+              }}
+              onRefreshAiSensyLogs={async () => {
+                const [statusRes, logsRes] = await Promise.all([getAiSensyStatus(), getAiSensyLogs()]);
+                setAiSensyStatus(statusRes);
+                setAiSensyLogs(logsRes.logs || []);
+              }}
               testEmailInput={testEmailInput}
               setTestEmailInput={setTestEmailInput}
               testingSmtp={testingSmtp}

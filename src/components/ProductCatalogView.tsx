@@ -1,8 +1,69 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Filter, Sparkles, ArrowRight, Star, SlidersHorizontal, Heart } from 'lucide-react';
-import { PRODUCTS, CATEGORIES_DATA } from '../data/mockData';
+import {
+  Search,
+  Filter,
+  Sparkles,
+  ArrowRight,
+  Star,
+  SlidersHorizontal,
+  Heart,
+  ShieldCheck,
+  Clock,
+  FileText,
+  Calculator,
+  Layers,
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { PRODUCTS } from '../data/mockData';
 import { Product, ProductCategory, PrintMethod } from '../types';
 import { ProductMockupCanvas } from './ProductMockupCanvas';
+
+const SHOWCASE_BANNER_BY_PRODUCT_ID: Record<string, { src: string; fit: 'cover' | 'contain' }> = {
+  'prod-ceramic-mug': {
+    src: '/assets/aistudio/ceramic_mug_banner_1672x941_dc952a76.webp',
+    fit: 'contain',
+  },
+  'prod-promo-table': {
+    src: '/assets/promo-table/promo-table-banner.webp',
+    fit: 'contain',
+  },
+  'prod-branding-umbrella': {
+    src: '/assets/aistudio/Custom_Printed_Branding_Umbrella_Banner_ddb8aff0.webp',
+    fit: 'contain',
+  },
+  'prod-canopy-kiosk': {
+    src: '/assets/aistudio/Promotional_Canopy_Kiosk_Feature_Graphic_58ea1c0d.webp',
+    fit: 'contain',
+  },
+  'prod-rollup-standee': {
+    src: '/assets/aistudio/Premium_Rollup_Standee_Infographic_4941e995.webp',
+    fit: 'contain',
+  },
+  'prod-visiting-card-300gsm': {
+    src: '/assets/aistudio/Premium_300_GSM_Business_Cards__1__cc07b248.webp',
+    fit: 'contain',
+  },
+  'prod-plain-polo': {
+    src: '/assets/aistudio/Classic_Plain_Polo_Color_Collection_17e25f68.webp',
+    fit: 'cover',
+  },
+  'prod-polo-01': {
+    src: '/assets/products/prod_tipping_polo.webp',
+    fit: 'cover',
+  },
+  'prod-joab-coolmax': {
+    src: '/assets/aistudio/JOAB_Coolmax_Polo_Shirt_Showcase_0673e0a4.webp',
+    fit: 'cover',
+  },
+  'prod-matty-polo': {
+    src: '/assets/aistudio/Premium_Matty_Polo_T-Shirt_Banner_45dae9b5.webp',
+    fit: 'cover',
+  },
+  'prod-cotton-flexi-caps': {
+    src: '/assets/aistudio/Cotton_Flexi_Caps_Product_Banner_7057e0bd.webp',
+    fit: 'cover',
+  },
+};
 
 interface ProductCatalogViewProps {
   initialCategory?: ProductCategory;
@@ -34,7 +95,7 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
   const [onlyWishlisted, setOnlyWishlisted] = useState(false);
   const [sortBy, setSortBy] = useState<'featured' | 'price-low' | 'price-high' | 'rating' | 'moq'>('featured');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [cardViews, setCardViews] = useState<Record<string, 'front' | 'back'>>({});
+  const [cardViews, setCardViews] = useState<Record<string, 'studio' | 'front' | 'back'>>({});
 
   // Sync state if category or search query props change dynamically
   useEffect(() => {
@@ -129,12 +190,73 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
   };
 
   const categories = [
-    { id: 'all', label: 'All Catalog' },
-    { id: 'corporate-gifting', label: 'Corporate Gifting' },
-    { id: 'promotional-items', label: 'Promotional Items' },
-    { id: 'custom-tshirt-printing', label: 'Custom T-Shirts' },
-    { id: 'printing-items', label: 'Printing Items' },
-    { id: 'caps', label: 'Custom Caps' },
+    {
+      id: 'all',
+      label: 'All Catalog',
+      sub: 'Full Collection',
+      image: '/assets/categories/cat_joining_kits.webp',
+    },
+    {
+      id: 'corporate-gifting',
+      label: 'Corporate Gifting',
+      sub: 'Mugs & Kits',
+      image: '/assets/aistudio/Corporate_Gifting_Badge_with_Branded_Essentials_11cc4d80.webp',
+    },
+    {
+      id: 'promotional-items',
+      label: 'Promotional Items',
+      sub: 'Canopies & Events',
+      image: '/assets/aistudio/Promotional_Products_Showcase_Badge_12258b82.webp',
+    },
+    {
+      id: 'custom-tshirt-printing',
+      label: 'Custom T-Shirts',
+      sub: 'Polos & Apparel',
+      image: '/assets/aistudio/Tipping_and_Classic_Polo_Shirt_Showcase_e4ad53f7.webp',
+    },
+    {
+      id: 'printing-items',
+      label: 'Printing Items',
+      sub: 'Cards & Flyers',
+      image: '/assets/aistudio/Professional_Printing_Items_Badge_03c76e87.webp',
+    },
+    {
+      id: 'caps',
+      label: 'Custom Caps',
+      sub: 'Cotton Caps',
+      image: '/assets/aistudio/Custom_Caps_Promotional_Badge_4c597194.webp',
+    },
+  ];
+
+  const heroShowcaseTiles = [
+    {
+      productId: 'prod-plain-polo',
+      title: '230 GSM Plain Polos',
+      tag: '16 Colours',
+      price: 'From ₹450',
+      image: '/assets/aistudio/Classic_Plain_Polo_Color_Collection_17e25f68.webp',
+    },
+    {
+      productId: 'prod-ceramic-mug',
+      title: 'Ceramic Brand Mugs',
+      tag: 'Min 5 pcs',
+      price: 'From ₹149',
+      image: '/assets/aistudio/ceramic_mug_banner_1672x941_dc952a76.webp',
+    },
+    {
+      productId: 'prod-cotton-flexi-caps',
+      title: 'Cotton Flexi Caps',
+      tag: '6 Colours',
+      price: 'From ₹150',
+      image: '/assets/aistudio/Cotton_Flexi_Caps_Product_Banner_7057e0bd.webp',
+    },
+    {
+      productId: 'prod-canopy-kiosk',
+      title: 'Canopy & Display Gear',
+      tag: '24–48h Ready',
+      price: 'Exhibition',
+      image: '/assets/aistudio/Promotional_Canopy_Kiosk_Feature_Graphic_58ea1c0d.webp',
+    },
   ];
 
   const printMethodsList = [
@@ -147,24 +269,205 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
   ];
 
   return (
-    <div className="bg-[#F5F5F7] min-h-screen py-10">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+    <div className="bg-[#F4F2FA] min-h-screen py-6 sm:py-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-7 sm:space-y-8">
         
-        {/* Breadcrumb & Header */}
-        <div>
-          <div className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">
-            TeqqnoWorld / Master Catalog
+        {/* Premium Dark Navy Master Catalog Hero Banner with Homepage-Style Visual Showcase */}
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: 'easeOut' }}
+          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0B1530] via-[#071B35] to-[#0E274E] text-white p-6 sm:p-8 lg:p-10 shadow-[0_24px_60px_-18px_rgba(7,27,53,0.45)] border border-white/10"
+        >
+          {/* Ambient Animated Orange & Navy Lighting */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -top-24 -right-16 w-80 h-80 rounded-full bg-[#FF7900]/22 blur-[110px] animate-faq-float"
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -bottom-24 -left-16 w-72 h-72 rounded-full bg-sky-400/12 blur-[100px] animate-faq-float-reverse"
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 opacity-[0.07]"
+            style={{
+              backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)',
+              backgroundSize: '20px 20px',
+            }}
+          />
+
+          <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-center">
+            {/* Left Copy & Quick Actions (7 cols) */}
+            <div className="lg:col-span-7 space-y-4">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/15 backdrop-blur-xs text-[11px] font-mono uppercase tracking-wider text-orange-200">
+                <span className="w-2 h-2 rounded-full bg-[#FF7900] animate-pulse" />
+                <span>TeqqnoWorld / Master Catalog</span>
+              </div>
+
+              <h1 className="font-display text-2xl sm:text-4xl lg:text-[2.6rem] font-bold tracking-tight leading-[1.12] text-white">
+                Corporate Merchandise &amp;{' '}
+                <span className="text-[#FF7900]">Custom Printing</span>
+              </h1>
+
+              <p className="text-slate-300 text-xs sm:text-sm max-w-2xl leading-relaxed">
+                Factory-direct branded apparel, corporate drinkware, exhibition displays, and executive stationery with live volume tier discounts and zero middleman markups.
+              </p>
+
+              {/* Micro Reassurance Pills */}
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-1">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-200 bg-white/8 border border-white/12 px-3 py-1.5 rounded-xl">
+                  <Clock className="w-3.5 h-3.5 text-[#FF7900]" />
+                  24–48h Fast Dispatch
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-200 bg-white/8 border border-white/12 px-3 py-1.5 rounded-xl">
+                  <Sparkles className="w-3.5 h-3.5 text-[#FF7900]" />
+                  Free 3D Proof in 1 Hour
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-200 bg-white/8 border border-white/12 px-3 py-1.5 rounded-xl">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  18% GST ITC Invoice
+                </span>
+              </div>
+
+              {/* Action Buttons (Mobile + Desktop Accessible) */}
+              {(onOpenQuoteCalculator || onOpenDownloadCatalog) && (
+                <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                  {onOpenQuoteCalculator && (
+                    <button
+                      type="button"
+                      onClick={onOpenQuoteCalculator}
+                      className="bg-[#FF7900] hover:bg-[#e56d00] active:scale-[0.98] text-white text-xs font-display font-semibold px-4 py-2.5 rounded-xl shadow-lg shadow-[#FF7900]/25 transition-all inline-flex items-center gap-2 cursor-pointer"
+                    >
+                      <Calculator className="w-3.5 h-3.5" />
+                      <span>B2B Quote Calculator</span>
+                    </button>
+                  )}
+                  {onOpenDownloadCatalog && (
+                    <button
+                      type="button"
+                      onClick={onOpenDownloadCatalog}
+                      className="bg-white/10 hover:bg-white/18 text-white border border-white/20 text-xs font-display font-semibold px-4 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-orange-300" />
+                      <span>Download Catalogues PDF</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right Visual Showcase Collage (5 cols) */}
+            <div className="lg:col-span-5 grid grid-cols-2 gap-3">
+              {heroShowcaseTiles.map((tile, idx) => {
+                const matchedProduct = PRODUCTS.find((p) => p.id === tile.productId);
+                return (
+                  <motion.button
+                    key={tile.productId}
+                    type="button"
+                    initial={{ opacity: 0, y: 14, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.4, delay: 0.08 + idx * 0.07 }}
+                    whileHover={{ y: -4, scale: 1.03 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => matchedProduct && onSelectProduct(matchedProduct)}
+                    className="group relative bg-white/95 hover:bg-white rounded-2xl p-2 text-left shadow-xl border border-white/20 overflow-hidden cursor-pointer transition-shadow hover:shadow-2xl"
+                  >
+                    <div className="relative aspect-[16/10] w-full rounded-xl overflow-hidden bg-slate-100">
+                      <img
+                        src={tile.image}
+                        alt={tile.title}
+                        width={240}
+                        height={150}
+                        loading={idx < 2 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        className="w-full h-full object-cover object-center group-hover:scale-108 transition-transform duration-500"
+                      />
+                      <span className="absolute top-1.5 right-1.5 bg-[#0B1530]/85 backdrop-blur-xs text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md">
+                        {tile.price}
+                      </span>
+                    </div>
+                    <div className="px-1 pt-2 pb-0.5 flex items-center justify-between gap-1">
+                      <span className="text-[11px] font-bold text-[#0B1530] truncate group-hover:text-[#FF7900] transition-colors">
+                        {tile.title}
+                      </span>
+                      <span className="text-[9px] font-mono text-zinc-500 shrink-0">{tile.tag}</span>
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </div>
           </div>
-          <h1 className="font-display text-3xl sm:text-4xl font-bold text-[#0B0B0D]">
-            Corporate Merchandise & Custom Printing
-          </h1>
-          <p className="text-zinc-600 text-sm mt-1 max-w-2xl">
-            Factory-direct custom merchandise with live volume tier discounts. Filter by print technique, MOQ, or corporate gifting category.
-          </p>
+        </motion.div>
+
+        {/* Visual Category Showcase Strip (Matching Homepage CategoriesSection Images) */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[#FF7900]" />
+              <span className="text-xs font-bold uppercase tracking-wider text-[#0B1530]">
+                Browse by Merchandise Category
+              </span>
+            </div>
+            <span className="text-[11px] text-zinc-500 font-mono hidden sm:inline">
+              Tap a category to filter catalog
+            </span>
+          </div>
+
+          <div className="flex lg:grid lg:grid-cols-6 gap-3 overflow-x-auto no-scrollbar touch-pan-x pb-1 pt-1">
+            {categories.map((c, idx) => {
+              const isActive = selectedCategory === c.id;
+              return (
+                <motion.button
+                  key={c.id}
+                  type="button"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: idx * 0.04 }}
+                  whileHover={{ y: -3 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setSelectedCategory(c.id as ProductCategory)}
+                  className={`group shrink-0 w-[132px] sm:w-[152px] lg:w-auto rounded-2xl p-3 border transition-all duration-200 flex flex-col items-center text-center cursor-pointer ${
+                    isActive
+                      ? 'bg-[#0B1530] text-white border-[#FF7900] shadow-lg shadow-[#0B1530]/18 ring-2 ring-[#FF7900]/25'
+                      : 'bg-white text-[#0B1530] border-slate-200/90 hover:border-[#FF7900]/50 hover:shadow-md'
+                  }`}
+                >
+                  <div
+                    className={`w-16 h-16 sm:w-18 sm:h-18 rounded-full overflow-hidden mb-2.5 p-0.5 transition-all duration-300 group-hover:scale-108 ${
+                      isActive
+                        ? 'ring-2 ring-[#FF7900] bg-white/10 shadow-md'
+                        : 'ring-1 ring-slate-200 bg-slate-50 shadow-xs'
+                    }`}
+                  >
+                    <img
+                      src={c.image}
+                      alt={c.label}
+                      width={72}
+                      height={72}
+                      loading="eager"
+                      decoding="async"
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  </div>
+                  <div className="text-xs font-display font-bold leading-tight line-clamp-1">
+                    {c.label}
+                  </div>
+                  <div
+                    className={`text-[10px] mt-0.5 line-clamp-1 ${
+                      isActive ? 'text-orange-300 font-medium' : 'text-zinc-500'
+                    }`}
+                  >
+                    {c.sub}
+                  </div>
+                </motion.button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Filter & Search Bar */}
-        <div className="bg-white rounded-2xl border border-[#E5E5EA] p-4 sm:p-6 shadow-xs space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-[0_10px_30px_-14px_rgba(11,21,48,0.1)] space-y-4">
           
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
             {/* Search Input */}
@@ -245,7 +548,15 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
           </div>
 
           {/* Expanded Multi-Facet Filter Drawers */}
+          <AnimatePresence initial={false}>
           {showAdvancedFilters && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+              className="overflow-hidden"
+            >
             <div className="pt-3 border-t border-zinc-100 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-zinc-50/80 p-3.5 rounded-xl text-xs">
               
               {/* Filter 1: Price Range */}
@@ -301,46 +612,48 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
               </div>
 
             </div>
+            </motion.div>
           )}
+          </AnimatePresence>
 
           {/* Active Filter Pills Bar */}
           {activeFiltersCount > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 text-xs border-t border-zinc-100">
               <span className="text-[11px] text-zinc-500 font-semibold">Active:</span>
               {selectedCategory !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-orange-100 text-[#FF7A00] font-semibold text-[11px]">
                   Category: {categories.find(c => c.id === selectedCategory)?.label}
-                  <button onClick={() => setSelectedCategory('all')} className="hover:text-black">×</button>
+                  <button onClick={() => setSelectedCategory('all')} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               {selectedPrintMethod !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
                   Print: {selectedPrintMethod}
-                  <button onClick={() => setSelectedPrintMethod('all')} className="hover:text-black">×</button>
+                  <button onClick={() => setSelectedPrintMethod('all')} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               {selectedPriceRange !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
                   Price: {selectedPriceRange}
-                  <button onClick={() => setSelectedPriceRange('all')} className="hover:text-black">×</button>
+                  <button onClick={() => setSelectedPriceRange('all')} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               {selectedMoqRange !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
                   MOQ: {selectedMoqRange}
-                  <button onClick={() => setSelectedMoqRange('all')} className="hover:text-black">×</button>
+                  <button onClick={() => setSelectedMoqRange('all')} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               {onlyWishlisted && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold text-[11px]">
                   Wishlist Only
-                  <button onClick={() => setOnlyWishlisted(false)} className="hover:text-black">×</button>
+                  <button onClick={() => setOnlyWishlisted(false)} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               {searchTerm && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200 text-zinc-800 font-medium text-[11px]">
                   Query: "{searchTerm}"
-                  <button onClick={() => setSearchTerm('')} className="hover:text-black">×</button>
+                  <button onClick={() => setSearchTerm('')} className="hover:text-black cursor-pointer">×</button>
                 </span>
               )}
               <button
@@ -351,47 +664,6 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
               </button>
             </div>
           )}
-
-          {/* Category Tabs with no-scrollbar for smooth horizontal swipe */}
-          <div className="flex items-center justify-between gap-3 border-t border-zinc-100 pt-3">
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar touch-pan-x pb-1">
-              {categories.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedCategory(c.id as ProductCategory)}
-                  className={`text-xs px-3.5 py-2 rounded-xl whitespace-nowrap transition-colors font-medium shrink-0 min-h-[40px] flex items-center cursor-pointer ${
-                    selectedCategory === c.id
-                      ? 'bg-[#0B0B0D] text-white shadow-xs font-semibold'
-                      : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                  }`}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Quick B2B Action Buttons */}
-            <div className="hidden lg:flex items-center gap-2 shrink-0">
-              {onOpenQuoteCalculator && (
-                <button
-                  onClick={onOpenQuoteCalculator}
-                  className="bg-orange-50 hover:bg-orange-100 text-[#FF7A00] border border-orange-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>B2B Calculator</span>
-                </button>
-              )}
-              {onOpenDownloadCatalog && (
-                <button
-                  onClick={onOpenDownloadCatalog}
-                  className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-semibold px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Filter className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>Catalogues PDF</span>
-                </button>
-              )}
-            </div>
-          </div>
 
         </div>
 
@@ -414,10 +686,17 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-            {filteredProducts.map((product) => {
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
+            {filteredProducts.map((product, idx) => {
               const lowestTier = product.tieredPricing[product.tieredPricing.length - 1];
               const isWishlisted = wishlistIds.includes(product.id);
+              const showcaseConfig = SHOWCASE_BANNER_BY_PRODUCT_ID[product.id];
+              const activeCardView = cardViews[product.id] || 'studio';
+              const supportsGarmentToggle =
+                product.productType === 'polo' ||
+                product.productType === 'tshirt' ||
+                product.productType === 'hoodie' ||
+                product.productType === 'cap';
               const sampleLogoArtwork = {
                 type: 'preset' as const,
                 presetId: 'your-logo',
@@ -429,48 +708,51 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
               };
 
               return (
-                <div
+                <motion.div
                   key={product.id}
-                  className="group bg-white rounded-2xl border border-[#E5E5EA] overflow-hidden hover:border-[#FF7A00]/60 hover:shadow-xl transition-all duration-200 flex flex-col justify-between"
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.35, delay: Math.min(idx * 0.045, 0.25) }}
+                  className="group bg-white rounded-2xl border border-slate-200/90 overflow-hidden hover:border-[#FF7900]/60 shadow-xs hover:shadow-[0_22px_45px_-16px_rgba(11,21,48,0.18)] hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between"
                 >
-                  {/* Canvas Container */}
+                  {/* Image / Studio Showcase Container (16:9 Matching Home Page Featured Products) */}
                   <div
                     onClick={() => onSelectProduct(product)}
-                    className="relative bg-[#F8F8FA] p-4 cursor-pointer overflow-hidden flex items-center justify-center border-b border-[#E5E5EA]"
+                    className="relative aspect-[16/10] bg-zinc-50 cursor-pointer overflow-hidden flex items-center justify-center border-b border-slate-200/80"
                   >
-                    <div className="absolute top-3 left-3 z-10 flex flex-col gap-1 items-start">
+                    <div className="absolute top-3 left-3 z-10 flex flex-wrap gap-1 items-start max-w-[calc(100%-56px)]">
                       {product.id === 'prod-rollup-standee' ? (
                         <>
-                          <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                          <span className="bg-[#0B1530]/90 backdrop-blur-xs text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
                             Black ONLY
                           </span>
-                          <span className="bg-zinc-800 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                          <span className="bg-zinc-800/90 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
                             3 ft × 6 ft
                           </span>
-                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                          <span className="bg-[#FF7900] text-white text-[10px] font-mono font-bold px-2 py-0.5 rounded-full shadow-2xs">
                             MOQ: 1 pc
                           </span>
                         </>
                       ) : product.id === 'prod-visiting-card-300gsm' ? (
                         <>
-                          <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                          <span className="bg-[#0B1530]/90 backdrop-blur-xs text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
                             White ONLY
                           </span>
-                          <span className="bg-zinc-800 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
-                            300 GSM Art Paper
+                          <span className="bg-zinc-800/90 text-white text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                            300 GSM
                           </span>
-                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                          <span className="bg-[#FF7900] text-white text-[10px] font-mono font-bold px-2 py-0.5 rounded-full shadow-2xs">
                             MOQ: 100 pcs
                           </span>
                         </>
                       ) : (
                         <>
                           {product.badge && (
-                            <span className="bg-[#0B0B0D] text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
+                            <span className="bg-[#0B1530]/90 backdrop-blur-xs text-white text-[10px] font-mono uppercase font-semibold px-2 py-0.5 rounded-full">
                               {product.badge}
                             </span>
                           )}
-                          <span className="bg-[#FF7A00]/10 text-[#FF7A00] border border-[#FF7A00]/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                          <span className="bg-[#FF7900] text-white text-[10px] font-mono font-bold px-2 py-0.5 rounded-full shadow-2xs">
                             MOQ: {product.moq} pcs
                           </span>
                         </>
@@ -496,133 +778,90 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
                       </button>
                     )}
 
-                    <div className="absolute bottom-2.5 left-3 z-10 text-[10px] font-mono text-zinc-600 bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded border border-zinc-200">
+                    <div className="absolute bottom-2.5 left-3 z-10 text-[10px] font-mono font-semibold text-zinc-700 bg-white/92 backdrop-blur-xs px-2 py-0.5 rounded-md border border-zinc-200/90 shadow-2xs">
                       ⚡ {product.dispatchTime}
                     </div>
 
-                    <div className="w-full h-56 group-hover:scale-105 transition-transform duration-300 flex items-center justify-center">
-                      {product.id === 'prod-promo-table' ? (
+                    <div className="w-full h-full group-hover:scale-105 transition-transform duration-500 flex items-center justify-center">
+                      {showcaseConfig && activeCardView === 'studio' ? (
                         <img
-                          src="/assets/promo-table/promo-table-banner.webp"
+                          src={showcaseConfig.src}
                           alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
+                          width={480}
+                          height={300}
+                          loading={idx < 3 ? 'eager' : 'lazy'}
                           decoding="async"
                           sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full object-contain"
-                        />
-                      ) : product.id === 'prod-branding-umbrella' ? (
-                        <img
-                          src="/assets/aistudio/Custom_Printed_Branding_Umbrella_Banner_ddb8aff0.webp"
-                          alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
-                          decoding="async"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full object-contain"
-                        />
-                      ) : product.id === 'prod-rollup-standee' ? (
-                        <img
-                          src="/assets/aistudio/Premium_Rollup_Standee_Infographic_4941e995.webp"
-                          alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
-                          decoding="async"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full aspect-[16/9] object-contain bg-white"
-                        />
-                      ) : product.id === 'prod-visiting-card-300gsm' ? (
-                        <img
-                          src="/assets/aistudio/Premium_300_GSM_Business_Cards__1__cc07b248.webp"
-                          alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
-                          decoding="async"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full object-contain bg-white"
-                        />
-                      ) : product.id === 'prod-canopy-kiosk' ? (
-                        <img
-                          src="/assets/aistudio/Promotional_Canopy_Kiosk_Feature_Graphic_58ea1c0d.webp"
-                          alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
-                          decoding="async"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full object-contain bg-white"
-                        />
-                      ) : product.id === 'prod-ceramic-mug' ? (
-                        <img
-                          src="/assets/aistudio/ceramic_mug_banner_1672x941_dc952a76.webp"
-                          alt={product.name}
-                          width={400}
-                          height={225}
-                          loading="lazy"
-                          decoding="async"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                          className="w-full h-full object-contain"
+                          className={`w-full h-full ${
+                            showcaseConfig.fit === 'cover' ? 'object-cover object-center' : 'object-contain bg-white p-1'
+                          }`}
                         />
                       ) : (
-                        <>
-                          <ProductMockupCanvas
-                            productType={product.productType}
-                            color={product.colors[0]}
-                            artwork={sampleLogoArtwork}
-                            printMethod={product.printMethods[0]}
-                            printPlacement={
-                              (cardViews[product.id] || 'front') === 'back'
-                                ? 'Upper Back Center'
-                                : product.productType === 'polo'
-                                ? 'Left Chest'
-                                : 'Center Chest'
-                            }
-                            view={cardViews[product.id] || 'front'}
-                            className="w-full h-full"
-                          />
-                          {(product.productType === 'polo' || product.productType === 'tshirt' || product.productType === 'hoodie') && (
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              className="absolute bottom-2.5 right-2.5 z-20 inline-flex items-center bg-white/95 backdrop-blur-xs border border-zinc-200 rounded-lg p-0.5 shadow-sm"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'front' }))}
-                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
-                                  (cardViews[product.id] || 'front') === 'front'
-                                    ? 'bg-[#0B0B0D] text-white'
-                                    : 'text-zinc-600 hover:text-zinc-900'
-                                }`}
-                              >
-                                Front
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'back' }))}
-                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
-                                  cardViews[product.id] === 'back'
-                                    ? 'bg-[#FF7A00] text-white'
-                                    : 'text-zinc-600 hover:text-zinc-900'
-                                }`}
-                              >
-                                Back
-                              </button>
-                            </div>
-                          )}
-                        </>
+                        <ProductMockupCanvas
+                          productType={product.productType}
+                          color={product.colors[0]}
+                          artwork={sampleLogoArtwork}
+                          printMethod={product.printMethods[0]}
+                          printPlacement={
+                            activeCardView === 'back'
+                              ? 'Upper Back Center'
+                              : product.productType === 'polo'
+                              ? 'Left Chest'
+                              : 'Center Chest'
+                          }
+                          view={activeCardView === 'back' ? 'back' : 'front'}
+                          className="w-full h-full p-3"
+                        />
                       )}
                     </div>
+
+                    {supportsGarmentToggle && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute bottom-2.5 right-2.5 z-20 inline-flex items-center bg-white/95 backdrop-blur-xs border border-zinc-200 rounded-lg p-0.5 shadow-sm"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'studio' }))}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                            activeCardView === 'studio'
+                              ? 'bg-[#0B1530] text-white'
+                              : 'text-zinc-600 hover:text-zinc-900'
+                          }`}
+                        >
+                          Photo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'front' }))}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                            activeCardView === 'front'
+                              ? 'bg-[#0B1530] text-white'
+                              : 'text-zinc-600 hover:text-zinc-900'
+                          }`}
+                        >
+                          Front
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCardViews((prev) => ({ ...prev, [product.id]: 'back' }))}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                            activeCardView === 'back'
+                              ? 'bg-[#FF7900] text-white'
+                              : 'text-zinc-600 hover:text-zinc-900'
+                          }`}
+                        >
+                          Back
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Card Content */}
-                  <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                  <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                        <span className="uppercase font-mono text-[10px] tracking-wide text-zinc-400">
+                        <span className="uppercase font-mono text-[10px] tracking-wide text-[#FF7900] font-semibold">
                           {product.category}
                         </span>
                         <div className="flex items-center gap-1 text-amber-500">
@@ -634,14 +873,33 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
 
                       <h3
                         onClick={() => onSelectProduct(product)}
-                        className="font-display font-bold text-sm text-[#0B0B0D] hover:text-[#FF7A00] transition-colors cursor-pointer line-clamp-1"
+                        className="font-display font-bold text-sm sm:text-base text-[#0B1530] group-hover:text-[#FF7900] transition-colors cursor-pointer line-clamp-1"
                       >
                         {product.name}
                       </h3>
 
-                      <p className="text-[11px] text-zinc-500 line-clamp-2 mt-1">
+                      <p className="text-[11px] text-zinc-500 line-clamp-2 mt-1 leading-relaxed">
                         {product.shortDesc}
                       </p>
+
+                      {/* Color Swatch Dots */}
+                      {product.colors.length > 0 && (
+                        <div className="flex items-center gap-1.5 mt-2.5">
+                          {product.colors.slice(0, 6).map((c) => (
+                            <span
+                              key={c.name}
+                              title={c.name}
+                              className="w-3.5 h-3.5 rounded-full border border-zinc-300 shadow-2xs shrink-0"
+                              style={{ backgroundColor: c.hex }}
+                            />
+                          ))}
+                          {product.colors.length > 6 && (
+                            <span className="text-[10px] font-mono text-zinc-500 font-semibold pl-0.5">
+                              +{product.colors.length - 6}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Tiered Price Matrix */}
@@ -698,7 +956,7 @@ export const ProductCatalogView: React.FC<ProductCatalogViewProps> = ({
                     )}
 
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>

@@ -1,8 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShieldCheck, 
   ArrowLeft, 
   Check, 
+  CheckCircle2,
+  Clock,
   CreditCard, 
   Building2, 
   FileCheck, 
@@ -20,6 +23,7 @@ import {
 } from 'lucide-react';
 import { NewCustomerPromoBanner } from './NewCustomerPromoBanner';
 import { VoiceInstructionsCard } from './VoiceInstructionsCard';
+import { CheckoutRecoveryOfferModal } from './CheckoutRecoveryOfferModal';
 import { CartItem, ShippingAddress, Order, UserProfile } from '../types';
 import { supabase } from '../lib/supabase';
 import { 
@@ -29,6 +33,16 @@ import {
 } from '../services/supabaseService';
 import { sendOrderConfirmationEmail, OrderEmailItem } from '../services/emailService';
 import {
+  ActiveRecoveryCoupon,
+  activateRecoveryCoupon,
+  clearRecoveryCoupon,
+  formatRemainingCountdown,
+  getActiveRecoveryCoupon,
+  sendCheckoutDropRecoveryWhatsApp,
+  sendOrderWhatsAppConfirmation,
+  subscribeRecoveryCoupon,
+} from '../services/aisensyService';
+import {
   getRazorpayStatus,
   loadRazorpayCheckoutScript,
   createRazorpayOrder,
@@ -37,6 +51,12 @@ import {
   RazorpayStatus,
   DelhiveryPincodeCheckResult,
 } from '../services/paymentAndLogisticsService';
+import {
+  getSavedDelhiveryCheck,
+  saveDelhiveryCheck,
+  subscribeDelhiveryCheck,
+} from '../services/delhiveryPincodeStore';
+import { getWhatsAppLink } from '../config/business';
 import {
   describeArtworkPlacement,
   extractArtworkAssetsFromItem,
@@ -71,17 +91,24 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     }
   });
 
-  // Form State initialized from user if available
+  // Form State initialized from user & checked Delhivery pincode if available
   const defaultAddress = user?.savedAddresses?.find(a => a.isDefault) || user?.savedAddresses?.[0];
+  const savedDelhiveryPin = getSavedDelhiveryCheck();
 
   const [fullName, setFullName] = useState(user?.name || 'Arjun Mehta');
   const [companyName, setCompanyName] = useState(user?.companyName || 'Nexus Dynamics India Pvt Ltd');
   const [email, setEmail] = useState(user?.email || 'arjun.mehta@nexusdynamics.in');
   const [phone, setPhone] = useState(user?.mobile ? `+91 ${user.mobile}` : '+91 98450 12345');
   const [street, setStreet] = useState(defaultAddress?.street || 'Level 4, Prestige Tech Cloud, Doddajala');
-  const [city, setCity] = useState(defaultAddress?.city || 'Bengaluru');
-  const [state, setState] = useState(defaultAddress?.state || 'Karnataka');
-  const [pincode, setPincode] = useState(defaultAddress?.pincode || '562157');
+  const [city, setCity] = useState(
+    (savedDelhiveryPin?.serviceable && savedDelhiveryPin.city) || defaultAddress?.city || 'Bengaluru'
+  );
+  const [state, setState] = useState(
+    (savedDelhiveryPin?.serviceable && savedDelhiveryPin.state) || defaultAddress?.state || 'Karnataka'
+  );
+  const [pincode, setPincode] = useState(
+    (savedDelhiveryPin?.serviceable && savedDelhiveryPin.pincode) || defaultAddress?.pincode || '562157'
+  );
   const [isB2BInvoice, setIsB2BInvoice] = useState(true);
   const [gstin, setGstin] = useState(user?.gstin || '29AABCN8291P1ZX');
   const [poNumber, setPoNumber] = useState('');
@@ -99,8 +126,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   >('Full Prepaid (100% Online)');
 
   const [razorpayStatus, setRazorpayStatus] = useState<RazorpayStatus | null>(null);
-  const [pincodeStatus, setPincodeStatus] = useState<DelhiveryPincodeCheckResult | null>(null);
+  const [areaCheckPin, setAreaCheckPin] = useState<string>(savedDelhiveryPin?.pincode || '');
+  const [areaCheckError, setAreaCheckError] = useState<string | null>(null);
+  const [pincodeStatus, setPincodeStatus] = useState<DelhiveryPincodeCheckResult | null>(
+    savedDelhiveryPin || null
+  );
   const [checkingPincode, setCheckingPincode] = useState(false);
+  const [userEditedPin, setUserEditedPin] = useState(false);
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
@@ -108,7 +140,26 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [orderVoiceNoteUrl, setOrderVoiceNoteUrl] = useState<string | null>(null);
   const [orderVoiceNotes, setOrderVoiceNotes] = useState<string>('');
 
-  // New Customer 10% OFF Promo Code State (synced with CartDrawer session)
+  // Recovery Offer Modal & 5% OFF Limited-Time Coupon State
+  const orderPlacedRef = React.useRef(false);
+  const recoverySentRef = React.useRef(false);
+  const [recoveryCoupon, setRecoveryCoupon] = useState<ActiveRecoveryCoupon | null>(() =>
+    getActiveRecoveryCoupon()
+  );
+  const [recoveryCountdown, setRecoveryCountdown] = useState<string>(() => {
+    const active = getActiveRecoveryCoupon();
+    return active ? formatRemainingCountdown(active.expiresAt) : '';
+  });
+  const [recoveryOfferModal, setRecoveryOfferModal] = useState<{
+    isOpen: boolean;
+    triggerReason: string;
+    expiresAt: number;
+    whatsappStatusMessage?: string | null;
+    whatsappSimulated?: boolean;
+    leavingCheckout?: boolean;
+  } | null>(null);
+
+  // Promo Code State (synced with CartDrawer session & limited-time 5% recovery coupon)
   const [promoInput, setPromoInput] = useState<string>(() => {
     try {
       return sessionStorage.getItem('teqqno_applied_coupon') || '';
@@ -132,6 +183,9 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       if (existing === 'WELCOME10' || existing === 'TEQQNO10') {
         return { type: 'success', text: `🎉 ${existing} applied — 10% New Customer discount active!` };
       }
+      if ((existing === 'SAVE5NOW' || existing === 'TEQQNO5') && getActiveRecoveryCoupon()) {
+        return { type: 'success', text: `⚡ ${existing} applied — Limited-time 5% OFF Checkout Saver active!` };
+      }
       if (existing === 'TEQQNOBULK') {
         return { type: 'success', text: `Bulk voucher TEQQNOBULK active!` };
       }
@@ -139,14 +193,76 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     return null;
   });
 
+  // Subscribe to recovery coupon updates & live countdown expiry
+  useEffect(() => {
+    const unsub = subscribeRecoveryCoupon((next) => {
+      setRecoveryCoupon(next);
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!recoveryCoupon) {
+      setRecoveryCountdown('');
+      return;
+    }
+    const tick = () => {
+      const fresh = getActiveRecoveryCoupon();
+      if (!fresh) {
+        setRecoveryCoupon(null);
+        setRecoveryCountdown('');
+        if (appliedPromoCode === 'SAVE5NOW' || appliedPromoCode === 'TEQQNO5') {
+          setAppliedPromoCode(null);
+          setPromoFeedback({ type: 'error', text: 'Limited-time 5% OFF coupon expired.' });
+        }
+        return;
+      }
+      setRecoveryCountdown(formatRemainingCountdown(fresh.expiresAt));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [recoveryCoupon, appliedPromoCode]);
+
+  // If user came back from AiSensy WhatsApp link (#checkout?coupon=SAVE5NOW), unlock & apply 5% OFF automatically
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash || '';
+    const queryIdx = hash.indexOf('?');
+    if (queryIdx !== -1) {
+      const params = new URLSearchParams(hash.slice(queryIdx + 1));
+      const urlCoupon = params.get('coupon')?.trim().toUpperCase();
+      if (urlCoupon === 'SAVE5NOW' || urlCoupon === 'TEQQNO5') {
+        const activated = activateRecoveryCoupon({
+          triggerReason: 'whatsapp_recovery_link',
+          validMinutes: 15,
+          autoApply: true,
+        });
+        setRecoveryCoupon(activated);
+        setAppliedPromoCode('SAVE5NOW');
+        setPromoInput('SAVE5NOW');
+        try {
+          sessionStorage.setItem('teqqno_applied_coupon', 'SAVE5NOW');
+        } catch {}
+        setPromoFeedback({
+          type: 'success',
+          text: '⚡ WhatsApp 5% OFF Voucher (SAVE5NOW) applied for 15 minutes!',
+        });
+      }
+    }
+  }, []);
+
   // Financial calculations (with promo discount applied pre-GST)
   const subtotal = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  const isRecovery5Valid = Boolean(getActiveRecoveryCoupon());
   const discountAmount =
     appliedPromoCode === 'WELCOME10' || appliedPromoCode === 'TEQQNO10'
       ? Math.round(subtotal * 0.1)
-      : appliedPromoCode === 'TEQQNOBULK'
-        ? Math.min(subtotal, 500)
-        : 0;
+      : (appliedPromoCode === 'SAVE5NOW' || appliedPromoCode === 'TEQQNO5') && isRecovery5Valid
+        ? Math.round(subtotal * 0.05)
+        : appliedPromoCode === 'TEQQNOBULK'
+          ? Math.min(subtotal, 500)
+          : 0;
   const discountedSubtotal = Math.max(0, subtotal - discountAmount);
   const shippingFee = subtotal >= 1999 || subtotal === 0 ? 0 : 149;
   const gstRate = 0.18;
@@ -174,6 +290,25 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         type: 'success',
         text: `🎉 Code ${normalized} applied! You saved ₹${saved.toLocaleString('en-IN')} (10% OFF).`,
       });
+    } else if (code === 'SAVE5NOW' || code === 'TEQQNO5') {
+      const active = getActiveRecoveryCoupon();
+      if (!active) {
+        setPromoFeedback({
+          type: 'error',
+          text: 'Limited-time 5% OFF voucher has expired or unlocks only when needed at checkout.',
+        });
+        return;
+      }
+      const saved = Math.round(subtotal * 0.05);
+      setAppliedPromoCode('SAVE5NOW');
+      setPromoInput('SAVE5NOW');
+      try {
+        sessionStorage.setItem('teqqno_applied_coupon', 'SAVE5NOW');
+      } catch {}
+      setPromoFeedback({
+        type: 'success',
+        text: `⚡ Limited-Time 5% OFF (SAVE5NOW) applied! You saved ₹${saved.toLocaleString('en-IN')}.`,
+      });
     } else if (code === 'TEQQNOBULK') {
       const saved = Math.min(subtotal, 500);
       setAppliedPromoCode('TEQQNOBULK');
@@ -188,7 +323,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     } else {
       setPromoFeedback({
         type: 'error',
-        text: 'Invalid promo code. Use WELCOME10 for 10% OFF on your first order.',
+        text: 'Invalid promo code. Use WELCOME10 or your limited-time 5% OFF code.',
       });
     }
   };
@@ -202,11 +337,208 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     } catch {}
   };
 
+  const triggerCheckoutDropRecovery = async (
+    reason: 'payment_cancelled' | 'payment_failed' | 'checkout_back' | 'checkout_hesitation',
+    leavingCheckout = false
+  ) => {
+    if (orderPlacedRef.current || items.length === 0) return;
+
+    // Avoid spamming the customer multiple times in the same checkout session
+    const sessionSentKey = `teqqno_drop_sent_${checkoutSessionId}`;
+    const alreadySentSession = (() => {
+      try {
+        return sessionStorage.getItem(sessionSentKey) === 'true';
+      } catch {
+        return false;
+      }
+    })();
+
+    if (recoverySentRef.current || alreadySentSession) {
+      if (leavingCheckout) {
+        onBackToCart();
+      }
+      return;
+    }
+
+    recoverySentRef.current = true;
+    try {
+      sessionStorage.setItem(sessionSentKey, 'true');
+    } catch {}
+
+    const cleanPhoneDigits = phone.replace(/[^0-9]/g, '');
+    const validPhone = cleanPhoneDigits.length >= 10 ? phone.trim() : '';
+    const itemsSummary = items
+      .map((it) => `${it.product.name} (${it.quantity} pcs)`)
+      .join(', ')
+      .slice(0, 120);
+
+    let waStatusMsg: string | null = null;
+    let waSimulated = true;
+    let expiresAtMs = Date.now() + 15 * 60 * 1000;
+
+    if (validPhone) {
+      const waRes = await sendCheckoutDropRecoveryWhatsApp({
+        checkoutSessionId,
+        customerName: fullName.trim(),
+        phone: validPhone,
+        cartTotal: total,
+        couponCode: 'SAVE5NOW',
+        discountPercent: 5,
+        validMinutes: 15,
+        triggerReason: reason,
+        itemsSummary,
+      });
+      waStatusMsg = waRes.message;
+      waSimulated = Boolean(waRes.simulated);
+      if (waRes.expiresAt) {
+        const parsed = new Date(waRes.expiresAt).getTime();
+        if (Number.isFinite(parsed)) expiresAtMs = parsed;
+      }
+    }
+
+    const activated = activateRecoveryCoupon({
+      triggerReason: reason,
+      validMinutes: 15,
+      autoApply: false,
+      whatsappDispatched: Boolean(validPhone),
+      whatsappPhone: validPhone,
+      whatsappSimulated: waSimulated,
+    });
+    setRecoveryCoupon(activated);
+
+    setRecoveryOfferModal({
+      isOpen: true,
+      triggerReason: reason,
+      expiresAt: activated.expiresAt || expiresAtMs,
+      whatsappStatusMessage: waStatusMsg,
+      whatsappSimulated: waSimulated,
+      leavingCheckout,
+    });
+  };
+
+  // Trigger recovery automatically ONLY on Checkout if customer hesitates/lingers (50s) or attempts desktop exit-intent without ordering
+  useEffect(() => {
+    if (items.length === 0 || orderPlacedRef.current) return;
+    const cleanPhoneDigits = phone.replace(/[^0-9]/g, '');
+    if (cleanPhoneDigits.length < 10) return;
+
+    const timer = setTimeout(() => {
+      if (!orderPlacedRef.current && !recoverySentRef.current) {
+        void triggerCheckoutDropRecovery('checkout_hesitation', false);
+      }
+    }, 50_000);
+
+    const handleMouseLeaveTop = (e: MouseEvent) => {
+      if (e.clientY <= 8 && !orderPlacedRef.current && !recoverySentRef.current) {
+        void triggerCheckoutDropRecovery('checkout_hesitation', false);
+      }
+    };
+    document.addEventListener('mouseleave', handleMouseLeaveTop);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mouseleave', handleMouseLeaveTop);
+    };
+  }, [checkoutSessionId, items.length, phone]);
+
   useEffect(() => {
     getRazorpayStatus().then(setRazorpayStatus).catch(() => {});
   }, []);
 
+  const resolveIndianState = (rawState?: string): string | null => {
+    if (!rawState) return null;
+    const trimmed = rawState.trim();
+    const codeMap: Record<string, string> = {
+      KA: 'Karnataka',
+      MH: 'Maharashtra',
+      DL: 'Delhi',
+      TN: 'Tamil Nadu',
+      TS: 'Telangana',
+      TG: 'Telangana',
+      GJ: 'Gujarat',
+      UP: 'Uttar Pradesh',
+      WB: 'West Bengal',
+      HR: 'Haryana',
+      RJ: 'Rajasthan',
+      KL: 'Kerala',
+      MP: 'Madhya Pradesh',
+      PB: 'Punjab',
+      GA: 'Goa',
+      AP: 'Andhra Pradesh',
+      BR: 'Bihar',
+      JH: 'Jharkhand',
+      OR: 'Odisha',
+      OD: 'Odisha',
+      CG: 'Chhattisgarh',
+      CT: 'Chhattisgarh',
+      UK: 'Uttarakhand',
+      UT: 'Uttarakhand',
+      HP: 'Himachal Pradesh',
+      AS: 'Assam',
+      CH: 'Chandigarh',
+      JK: 'Jammu & Kashmir',
+      LA: 'Ladakh',
+      SK: 'Sikkim',
+      TR: 'Tripura',
+      ML: 'Meghalaya',
+      MN: 'Manipur',
+      NL: 'Nagaland',
+      MZ: 'Mizoram',
+      AR: 'Arunachal Pradesh',
+      PY: 'Puducherry',
+    };
+    const mapped = codeMap[trimmed.toUpperCase()] || trimmed;
+    const match = indianStates.find(
+      (s) => s.toLowerCase() === mapped.toLowerCase() || mapped.toLowerCase().includes(s.toLowerCase())
+    );
+    return match || null;
+  };
+
   useEffect(() => {
+    return subscribeDelhiveryCheck((next) => {
+      if (next?.pincode) {
+        setAreaCheckPin(next.pincode);
+        setAreaCheckError(null);
+        setPincode(next.pincode);
+        setPincodeStatus(next);
+        if (next.serviceable && next.city) {
+          setCity(next.city);
+        }
+        const resolved = resolveIndianState(next.state);
+        if (next.serviceable && resolved) {
+          setState(resolved);
+        }
+      }
+    });
+  }, []);
+
+  const handleManualDelhiveryCheck = async (targetPin?: string) => {
+    const cleanPin = (targetPin ?? areaCheckPin).replace(/[^0-9]/g, '').slice(0, 6);
+    setAreaCheckPin(cleanPin);
+    setAreaCheckError(null);
+    if (cleanPin.length !== 6) {
+      setAreaCheckError('Please enter a valid 6-digit Indian pincode.');
+      return;
+    }
+    setUserEditedPin(false);
+    setPincode(cleanPin);
+    setCheckingPincode(true);
+    try {
+      const res = await checkDelhiveryPincode(cleanPin);
+      setPincodeStatus(res);
+      saveDelhiveryCheck(res);
+      if (res.serviceable) {
+        if (res.city) setCity(res.city);
+        const resolved = resolveIndianState(res.state);
+        if (resolved) setState(resolved);
+      }
+    } finally {
+      setCheckingPincode(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!userEditedPin) return;
     const cleanPin = pincode.replace(/[^0-9]/g, '');
     if (cleanPin.length !== 6) {
       setPincodeStatus(null);
@@ -217,17 +549,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     const timer = setTimeout(() => {
       checkDelhiveryPincode(cleanPin)
         .then((res) => {
-          if (!cancelled) setPincodeStatus(res);
+          if (!cancelled) {
+            setPincodeStatus(res);
+            setAreaCheckPin(cleanPin);
+            setAreaCheckError(null);
+            saveDelhiveryCheck(res);
+          }
         })
         .finally(() => {
           if (!cancelled) setCheckingPincode(false);
         });
-    }, 450);
+    }, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [pincode]);
+  }, [pincode, userEditedPin]);
 
   // GSTIN State Detection
   const stateCodeMap: Record<string, string> = {
@@ -300,6 +637,16 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanShipPin = pincode.replace(/[^0-9]/g, '');
+    if (cleanShipPin.length !== 6) {
+      setOrderError('Please enter a valid 6-digit delivery pincode in Step 2 before placing your order.');
+      return;
+    }
+    if (pincodeStatus && !pincodeStatus.serviceable) {
+      setOrderError(`Delhivery courier delivery is currently unavailable for pincode ${cleanShipPin}. Please enter a serviceable pincode in Step 2 or contact our logistics team on WhatsApp.`);
+      return;
+    }
+
     setIsProcessing(true);
     setOrderError(null);
     setUploadStepStatus('Initiating order processing...');
@@ -370,11 +717,15 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             },
             theme: { color: '#FF7A00' },
             modal: {
-              ondismiss: () => reject(new Error('Payment cancelled before completion. Your cart has been preserved.')),
+              ondismiss: () => {
+                void triggerCheckoutDropRecovery('payment_cancelled', false);
+                reject(new Error('Payment cancelled before completion. We unlocked a limited-time 5% OFF voucher for you!'));
+              },
             },
             handler: (resp: any) => resolve(resp),
           });
           rzpInstance.on('payment.failed', (failResp: any) => {
+            void triggerCheckoutDropRecovery('payment_failed', false);
             reject(new Error(failResp?.error?.description || 'Razorpay payment failed. Please try again.'));
           });
           rzpInstance.open();
@@ -577,43 +928,64 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       };
 
       // CRO: Mark abandoned lead as recovered upon successful placement
+      orderPlacedRef.current = true;
       markCheckoutRecovered(checkoutSessionId, primaryId).catch(err => {
         console.warn('[Mark Checkout Recovered Warning]:', err);
       });
+      clearRecoveryCoupon();
       try {
         sessionStorage.removeItem('teqqno_checkout_session_id');
         sessionStorage.removeItem('teqqno_applied_coupon');
+        sessionStorage.removeItem(`teqqno_drop_sent_${checkoutSessionId}`);
       } catch {}
 
       // Trigger automated Hostinger SMTP order confirmation (Customer) & New Order Alert (Admin)
-      setUploadStepStatus('Sending order confirmation & admin artwork emails...');
-      const emailResult = await sendOrderConfirmationEmail({
-        orderId: primaryId,
-        orderNumber,
-        customerName: fullName.trim(),
-        customerEmail: email.trim(),
-        company: companyName?.trim() || undefined,
-        phone: phone.trim(),
-        gstin: isB2BInvoice && gstin ? gstin.trim() : undefined,
-        paymentMode,
-        amountPaid: payableNow,
-        balanceDue,
-        razorpayPaymentId,
-        orderVoiceNoteUrl: orderVoiceNoteUrl || undefined,
-        orderNotes: orderVoiceNotes.trim() || undefined,
-        items: emailItems,
-        subtotal: discountedSubtotal,
-        gstAmount,
-        shippingFee,
-        total,
-        estimatedDispatch: '24-48h Fast Dispatch via Delhivery',
-        shippingAddress: {
-          street,
-          city,
-          state,
-          pincode,
-        },
-      });
+      setUploadStepStatus('Sending order confirmation emails & WhatsApp alert...');
+      const itemsSummary = items
+        .map((it) => `${it.product.name} (${it.quantity} pcs)`)
+        .join(', ');
+
+      const [emailResult, whatsappResult] = await Promise.all([
+        sendOrderConfirmationEmail({
+          orderId: primaryId,
+          orderNumber,
+          customerName: fullName.trim(),
+          customerEmail: email.trim(),
+          company: companyName?.trim() || undefined,
+          phone: phone.trim(),
+          gstin: isB2BInvoice && gstin ? gstin.trim() : undefined,
+          paymentMode,
+          amountPaid: payableNow,
+          balanceDue,
+          razorpayPaymentId,
+          orderVoiceNoteUrl: orderVoiceNoteUrl || undefined,
+          orderNotes: orderVoiceNotes.trim() || undefined,
+          items: emailItems,
+          subtotal: discountedSubtotal,
+          gstAmount,
+          shippingFee,
+          total,
+          estimatedDispatch: '24-48h Fast Dispatch via Delhivery',
+          shippingAddress: {
+            street,
+            city,
+            state,
+            pincode,
+          },
+        }),
+        sendOrderWhatsAppConfirmation({
+          orderId: primaryId,
+          orderNumber,
+          customerName: fullName.trim(),
+          phone: phone.trim(),
+          total,
+          amountPaid: payableNow,
+          balanceDue,
+          paymentMode,
+          itemsSummary,
+          shippingCity: city,
+        }),
+      ]);
 
       newOrder.emailNotification = {
         status: emailResult.simulated
@@ -624,6 +996,20 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         message: emailResult.message,
         customerSent: emailResult.customerSent,
         adminSent: emailResult.adminSent,
+      };
+
+      newOrder.whatsappActionStatus = whatsappResult.whatsappActionStatus || 'pending';
+      newOrder.whatsappNotification = {
+        status: whatsappResult.simulated
+          ? 'simulated'
+          : whatsappResult.success
+            ? 'sent'
+            : 'failed',
+        phone: whatsappResult.phone || phone.trim(),
+        message: whatsappResult.message,
+        confirmUrl: whatsappResult.confirmUrl,
+        cancelUrl: whatsappResult.cancelUrl,
+        previewMessage: whatsappResult.previewMessage,
       };
 
       setIsProcessing(false);
@@ -638,9 +1024,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
 
   const indianStates = [
-    'Karnataka', 'Maharashtra', 'Delhi-NCR', 'Tamil Nadu', 'Telangana',
+    'Karnataka', 'Maharashtra', 'Delhi', 'Delhi-NCR', 'Tamil Nadu', 'Telangana',
     'Gujarat', 'Uttar Pradesh', 'West Bengal', 'Haryana', 'Rajasthan',
-    'Kerala', 'Madhya Pradesh', 'Punjab', 'Goa', 'Andhra Pradesh'
+    'Kerala', 'Madhya Pradesh', 'Punjab', 'Goa', 'Andhra Pradesh',
+    'Bihar', 'Jharkhand', 'Odisha', 'Chhattisgarh', 'Uttarakhand',
+    'Himachal Pradesh', 'Assam', 'Chandigarh', 'Jammu & Kashmir', 'Ladakh',
+    'Sikkim', 'Tripura', 'Meghalaya', 'Manipur', 'Nagaland', 'Mizoram',
+    'Arunachal Pradesh', 'Puducherry', 'Andaman & Nicobar Islands', 'Lakshadweep'
   ];
 
   return (
@@ -650,8 +1040,15 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         {/* Top Back & Header */}
         <div className="flex items-center justify-between">
           <button
-            onClick={onBackToCart}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-600 hover:text-[#0B0B0D] transition-colors"
+            type="button"
+            onClick={() => {
+              if (!recoverySentRef.current && items.length > 0 && !orderPlacedRef.current) {
+                void triggerCheckoutDropRecovery('checkout_back', true);
+              } else {
+                onBackToCart();
+              }
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-600 hover:text-[#0B0B0D] transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Return to Shopping Bag</span>
@@ -882,13 +1279,224 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     <label className="block text-xs font-medium text-zinc-700 mb-1">Pincode *</label>
                     <input
                       type="text"
+                      inputMode="numeric"
                       required
                       maxLength={6}
                       value={pincode}
-                      onChange={(e) => setPincode(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-sm sm:text-sm font-mono border border-zinc-300 rounded-xl focus:border-[#FF7A00] outline-none min-h-[44px]"
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+                        setUserEditedPin(true);
+                        setPincode(clean);
+                        setAreaCheckPin(clean);
+                        setAreaCheckError(null);
+                      }}
+                      placeholder="6-digit PIN"
+                      className="w-full px-3.5 py-2.5 text-sm sm:text-sm font-mono tabular-nums border border-zinc-300 rounded-xl focus:border-[#FF7A00] outline-none min-h-[44px]"
                     />
                   </div>
+                </div>
+
+                {/* Interactive Delhivery Serviceability & Area Availability Checker in Checkout */}
+                <div className="rounded-2xl border border-[#E5E5EA] bg-[#FAF9FD] p-4 space-y-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-[#071B35] text-white flex items-center justify-center shrink-0 overflow-hidden">
+                      <motion.div
+                        animate={checkingPincode ? { x: [-8, 8, -8] } : { x: 0 }}
+                        transition={checkingPincode ? { repeat: Infinity, duration: 0.75 } : { duration: 0.2 }}
+                      >
+                        <Truck className="w-4 h-4 text-[#FF7A00]" />
+                      </motion.div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display font-bold text-xs sm:text-sm text-[#071B35]">
+                        Check Delhivery Delivery in Your Area
+                      </div>
+                      <div className="text-[11px] text-zinc-500">
+                        Apne area ka 6-digit PIN code daal kar check karein (Hyderabad hub 502032 se dispatch)
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dedicated Pincode Input + Check Button inside the selected box */}
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="relative flex-1">
+                      <MapPin className="w-4 h-4 text-[#FF7A00] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={areaCheckPin}
+                        onChange={(e) => {
+                          setAreaCheckPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                          setAreaCheckError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void handleManualDelhiveryCheck(areaCheckPin);
+                          }
+                        }}
+                        placeholder="Enter your 6-digit area PIN code (e.g. 110001)"
+                        aria-label="Enter your area pincode to check Delhivery delivery"
+                        className="w-full pl-10 pr-3.5 py-2.5 min-h-[42px] text-xs sm:text-sm font-mono tabular-nums bg-white border border-zinc-300 rounded-xl focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/15 outline-none text-[#071B35] placeholder:font-sans placeholder:text-zinc-400"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleManualDelhiveryCheck(areaCheckPin)}
+                      disabled={checkingPincode}
+                      className="min-h-[42px] px-4 py-2 rounded-xl bg-[#071B35] hover:bg-[#0d2c54] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60 transition-colors whitespace-nowrap"
+                    >
+                      {checkingPincode ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FF7A00]" />
+                          <span>Checking...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Truck className="w-3.5 h-3.5 text-[#FF7A00]" />
+                          <span>Check Availability</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {areaCheckError && (
+                    <div className="text-xs text-red-600 font-medium flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{areaCheckError}</span>
+                    </div>
+                  )}
+
+                  {/* Quick Metro City Check Shortcuts */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                    <span className="font-medium text-zinc-400">Quick test PIN:</span>
+                    {[
+                      { label: 'Hyderabad', pin: '500081' },
+                      { label: 'Bengaluru', pin: '560001' },
+                      { label: 'Mumbai', pin: '400001' },
+                      { label: 'Delhi NCR', pin: '110001' },
+                    ].map((sample) => (
+                      <button
+                        key={sample.pin}
+                        type="button"
+                        onClick={() => void handleManualDelhiveryCheck(sample.pin)}
+                        className="hover:text-[#FF7A00] font-medium transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        {sample.label} <span className="font-mono text-zinc-400">({sample.pin})</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <AnimatePresence mode="wait">
+                    {checkingPincode ? (
+                      <motion.div
+                        key="checking-delhivery"
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="bg-white border border-zinc-200 rounded-xl p-3 text-xs text-zinc-600 flex items-center gap-2"
+                      >
+                        <Loader2 className="w-4 h-4 animate-spin text-[#FF7A00] shrink-0" />
+                        <span>
+                          Checking Delhivery Express serviceability for pincode{' '}
+                          <strong className="font-mono text-[#071B35]">{pincode}</strong>...
+                        </span>
+                      </motion.div>
+                    ) : pincodeStatus ? (
+                      <motion.div
+                        key={`${pincodeStatus.pincode}-${pincodeStatus.serviceable}`}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.22 }}
+                        className={`rounded-xl border p-3 text-xs space-y-2 ${
+                          pincodeStatus.serviceable
+                            ? 'bg-white border-emerald-200 text-zinc-800'
+                            : 'bg-red-50/80 border-red-200 text-red-900'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="flex items-start gap-2 min-w-0 flex-1">
+                            {pincodeStatus.serviceable ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                            )}
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="font-bold text-[#071B35]">
+                                {pincodeStatus.serviceable
+                                  ? `Delhivery Available · ${
+                                      [pincodeStatus.areaName, pincodeStatus.city, pincodeStatus.state]
+                                        .filter(Boolean)
+                                        .filter((v, idx, arr) => arr.indexOf(v) === idx)
+                                        .join(', ') || pincodeStatus.pincode
+                                    } (${pincodeStatus.pincode})`
+                                  : `Delivery Not Available for ${pincodeStatus.pincode}`}
+                              </div>
+                              {pincodeStatus.serviceable ? (
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-zinc-600">
+                                  <span className="inline-flex items-center gap-1 font-mono font-semibold text-emerald-700">
+                                    <Clock className="w-3 h-3" />
+                                    Est. Delivery: {pincodeStatus.estimatedDays || '2–4 business days'}
+                                  </span>
+                                  <span>Delhivery Prepaid Express · 100% Insured</span>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-red-700">
+                                  {pincodeStatus.message || 'Please enter a valid serviceable Indian pincode.'}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {pincodeStatus.serviceable &&
+                            pincodeStatus.city &&
+                            pincodeStatus.city.toLowerCase() !== city.trim().toLowerCase() && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (pincodeStatus.city) setCity(pincodeStatus.city);
+                                  const resolved = resolveIndianState(pincodeStatus.state);
+                                  if (resolved) setState(resolved);
+                                }}
+                                className="text-[11px] font-semibold text-[#FF7A00] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                Fill {pincodeStatus.city} in Address →
+                              </button>
+                            )}
+
+                          {!pincodeStatus.serviceable && (
+                            <a
+                              href={getWhatsAppLink(
+                                `Hi TeqqnoWorld, my checkout pincode ${pincodeStatus.pincode} showed unserviceable on Delhivery. Can you arrange corporate delivery?`
+                              )}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] font-semibold text-[#071B35] hover:text-[#FF7A00] underline whitespace-nowrap shrink-0"
+                            >
+                              Ask Logistics Team →
+                            </a>
+                          )}
+                        </div>
+
+                        {pincodeStatus.serviceable && (
+                          <div className="relative h-1.5 w-full bg-emerald-100 rounded-full overflow-hidden">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: '100%' }}
+                              transition={{ duration: 0.6, ease: 'easeOut' }}
+                              className="h-full bg-gradient-to-r from-[#FF7A00] to-emerald-500 rounded-full"
+                            />
+                          </div>
+                        )}
+                      </motion.div>
+                    ) : (
+                      <div className="text-[11px] text-zinc-500">
+                        Enter a 6-digit Indian pincode above and click <strong>Check Availability</strong> to verify Delhivery courier coverage.
+                      </div>
+                    )}
+                  </AnimatePresence>
                 </div>
 
                 {/* Separate Billing Address Toggle */}
@@ -939,35 +1547,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                       </div>
                     </div>
                   )}
-                </div>
-
-                {/* Live Delhivery Pincode Serviceability & Logistics Info */}
-                <div className="rounded-xl p-3 bg-zinc-50 border border-zinc-200 text-[11px] flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 text-zinc-700">
-                    <Truck className="w-3.5 h-3.5 text-[#FF7A00] shrink-0" />
-                    <span>
-                      Dispatched from Hyderabad Facility via <strong>Delhivery Prepaid Express</strong> to {city}, {state}
-                    </span>
-                  </div>
-                  {checkingPincode ? (
-                    <span className="inline-flex items-center gap-1 text-zinc-500 font-mono">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Checking {pincode}...
-                    </span>
-                  ) : pincodeStatus ? (
-                    <span
-                      className={`inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded-full ${
-                        pincodeStatus.serviceable
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-red-100 text-red-700'
-                      }`}
-                    >
-                      <MapPin className="w-3 h-3" />
-                      {pincodeStatus.serviceable
-                        ? `${pincodeStatus.city || pincode}: Serviceable (${pincodeStatus.estimatedDays || '2-4 days'})`
-                        : `${pincode}: Non-serviceable`}
-                    </span>
-                  ) : null}
                 </div>
               </div>
             </div>
@@ -1113,6 +1692,32 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 compact
               />
 
+              {/* Limited-Time 5% OFF Checkout Saver Countdown Strip */}
+              {recoveryCoupon && recoveryCountdown && (
+                <div className="rounded-xl border border-[#FF7A00]/45 bg-amber-50/90 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Clock className="w-4 h-4 text-[#FF7A00] shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-[#071B35] truncate">
+                        5% OFF Saver Active ({recoveryCoupon.code})
+                      </div>
+                      <div className="text-[11px] text-zinc-600 font-mono">
+                        Expires in {recoveryCountdown}
+                      </div>
+                    </div>
+                  </div>
+                  {appliedPromoCode !== 'SAVE5NOW' && (
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPromoCode('SAVE5NOW')}
+                      className="px-2.5 py-1 rounded-lg bg-[#FF7A00] text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                    >
+                      Apply 5%
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Promo Code Input & Quick WELCOME10 Chip */}
               <div className="bg-[#FAF9FD] border border-[#ECEAF3] rounded-xl p-3.5 space-y-2.5">
                 <div className="flex items-center justify-between text-[11px] font-bold text-[#0B0B0D]">
@@ -1184,7 +1789,14 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 </div>
                 {discountAmount > 0 && (
                   <div className="flex justify-between text-emerald-700 font-semibold">
-                    <span>Promo Discount ({appliedPromoCode} · 10% OFF):</span>
+                    <span>
+                      Promo Discount ({appliedPromoCode}
+                      {appliedPromoCode === 'SAVE5NOW' || appliedPromoCode === 'TEQQNO5'
+                        ? ' · 5% OFF Limited-Time'
+                        : appliedPromoCode === 'TEQQNOBULK'
+                          ? ' · Bulk Voucher'
+                          : ' · 10% OFF'}):
+                    </span>
                     <span className="font-mono">-₹{discountAmount.toLocaleString('en-IN')}</span>
                   </div>
                 )}
@@ -1217,6 +1829,26 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Delhivery Area Verification Summary before Pay/Confirm CTA */}
+              {pincodeStatus && (
+                <div
+                  className={`rounded-xl border px-3.5 py-2.5 text-xs flex items-center justify-between gap-2 ${
+                    pincodeStatus.serviceable
+                      ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                      : 'bg-red-50 border-red-200 text-red-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Truck className={`w-4 h-4 shrink-0 ${pincodeStatus.serviceable ? 'text-emerald-600' : 'text-red-600'}`} />
+                    <span className="truncate font-medium">
+                      {pincodeStatus.serviceable
+                        ? `Delhivery to ${pincodeStatus.city || city} (${pincodeStatus.pincode}) · ${pincodeStatus.estimatedDays || '2–4 business days'}`
+                        : `Pincode ${pincodeStatus.pincode} is not serviceable — update in Step 2`}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Submit CTA */}
               <button
@@ -1255,6 +1887,33 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         </form>
 
       </div>
+
+      {/* Checkout Drop / Payment Back-Out Limited-Time 5% OFF Recovery Modal */}
+      {recoveryOfferModal && (
+        <CheckoutRecoveryOfferModal
+          isOpen={recoveryOfferModal.isOpen}
+          onClose={() => setRecoveryOfferModal(null)}
+          onApplyCouponAndContinue={(code) => {
+            handleApplyPromoCode(code);
+            setRecoveryOfferModal(null);
+          }}
+          onContinueWithoutApplying={() => {
+            setRecoveryOfferModal(null);
+            onBackToCart();
+          }}
+          couponCode="SAVE5NOW"
+          discountPercent={5}
+          expiresAt={recoveryOfferModal.expiresAt}
+          subtotal={subtotal}
+          triggerReason={recoveryOfferModal.triggerReason}
+          customerPhone={phone}
+          customerName={fullName}
+          whatsappStatusMessage={recoveryOfferModal.whatsappStatusMessage}
+          whatsappSimulated={recoveryOfferModal.whatsappSimulated}
+          leavingCheckout={recoveryOfferModal.leavingCheckout}
+        />
+      )}
     </div>
   );
 };
+

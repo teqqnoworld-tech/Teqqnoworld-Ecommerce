@@ -1,67 +1,102 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  X,
-  Upload,
-  ZoomIn,
-  ZoomOut,
-  RotateCw,
-  Maximize2,
-  RefreshCw,
   AlertTriangle,
+  ArrowRight,
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   Eye,
+  Layers,
+  Maximize2,
+  RefreshCw,
+  RotateCw,
+  ShoppingCart,
   Sliders,
   Sparkles,
-  Layers,
-  ArrowRight,
-  Info,
   Trash2,
-  FileText
+  Truck,
+  Upload,
+  X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { VisitingCardDesignState } from '../types';
 import { VisitingCard3DCanvas } from './VisitingCard3DCanvas';
 import { compressImageFile } from '../utils/imageCompressor';
+import { calculateProductPrice, formatCurrencyINR } from '../data/pricingRules';
 
 interface VisitingCardDesignEditorProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (design: VisitingCardDesignState) => void;
+  onConfirm: (design: VisitingCardDesignState, artworkApproved?: boolean) => void;
   initialDesign?: VisitingCardDesignState;
+  quantity?: number;
+  onQuantityChange?: (qty: number) => void;
+  initialApproved?: boolean;
+  onDirectAddToCart?: (payload: {
+    design: VisitingCardDesignState;
+    quantity: number;
+    artworkApproved: boolean;
+  }) => Promise<void> | void;
 }
 
 const DEFAULT_SETTINGS = { x: 0, y: 0, scale: 1, rotation: 0 };
+const QUICK_QUANTITIES = [100, 200, 500, 1000, 2000];
 
 export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> = ({
   isOpen,
   onClose,
   onConfirm,
   initialDesign,
+  quantity: propQuantity = 100,
+  onQuantityChange,
+  initialApproved = false,
+  onDirectAddToCart,
 }) => {
   const [activeSide, setActiveSide] = useState<'front' | 'back'>('front');
   const [previewMode, setPreviewMode] = useState<'editor' | 'mockup' | '3d'>('editor');
   const [showBleed, setShowBleed] = useState<boolean>(true);
   const [showSafeZone, setShowSafeZone] = useState<boolean>(true);
 
+  const [localQty, setLocalQty] = useState<number>(propQuantity);
+  useEffect(() => {
+    setLocalQty(propQuantity);
+  }, [propQuantity]);
+
+  const activeQty = onQuantityChange ? propQuantity : localQty;
+  const setQty = (next: number) => {
+    const safe = Math.max(100, next);
+    setLocalQty(safe);
+    onQuantityChange?.(safe);
+  };
+
   // Design state
   const [frontDataUrl, setFrontDataUrl] = useState<string | undefined>(initialDesign?.frontDataUrl);
   const [backDataUrl, setBackDataUrl] = useState<string | undefined>(initialDesign?.backDataUrl);
   const [frontFileName, setFrontFileName] = useState<string | undefined>(initialDesign?.frontFileName);
   const [backFileName, setBackFileName] = useState<string | undefined>(initialDesign?.backFileName);
-  const [frontSettings, setFrontSettings] = useState(initialDesign?.frontSettings || { ...DEFAULT_SETTINGS });
-  const [backSettings, setBackSettings] = useState(initialDesign?.backSettings || { ...DEFAULT_SETTINGS });
+  const [frontSettings, setFrontSettings] = useState(
+    initialDesign?.frontSettings || { ...DEFAULT_SETTINGS }
+  );
+  const [backSettings, setBackSettings] = useState(
+    initialDesign?.backSettings || { ...DEFAULT_SETTINGS }
+  );
   const [frontLowRes, setFrontLowRes] = useState<boolean>(false);
   const [backLowRes, setBackLowRes] = useState<boolean>(false);
-  const [frontDimensions, setFrontDimensions] = useState<{ width: number; height: number } | null>(null);
-  const [backDimensions, setBackDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [frontDimensions, setFrontDimensions] = useState<{ width: number; height: number } | null>(
+    null
+  );
+  const [backDimensions, setBackDimensions] = useState<{ width: number; height: number } | null>(
+    null
+  );
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [artworkApproved, setArtworkApproved] = useState<boolean>(initialApproved);
+  const [isAddingToCart, setIsAddingToCart] = useState<boolean>(false);
 
-  // Dragging state
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const cardCanvasRef = useRef<HTMLDivElement>(null);
-
-  // File input refs
   const frontFileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -76,6 +111,11 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     }
   }, [initialDesign]);
 
+  const pricing = useMemo(
+    () => calculateProductPrice('prod-visiting-card-300gsm', activeQty),
+    [activeQty]
+  );
+
   if (!isOpen) return null;
 
   const currentDataUrl = activeSide === 'front' ? frontDataUrl : backDataUrl;
@@ -84,23 +124,25 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
   const currentLowRes = activeSide === 'front' ? frontLowRes : backLowRes;
   const currentDim = activeSide === 'front' ? frontDimensions : backDimensions;
 
-  const updateCurrentSettings = (updater: (prev: typeof DEFAULT_SETTINGS) => typeof DEFAULT_SETTINGS) => {
-    if (activeSide === 'front') {
-      setFrontSettings(updater);
-    } else {
-      setBackSettings(updater);
-    }
+  const updateCurrentSettings = (
+    updater: (prev: typeof DEFAULT_SETTINGS) => typeof DEFAULT_SETTINGS
+  ) => {
+    if (activeSide === 'front') setFrontSettings(updater);
+    else setBackSettings(updater);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, side: 'front' | 'back') => {
+  const handleFileUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    side: 'front' | 'back'
+  ) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
     const fileName = file.name;
     const isPdf = file.type === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
 
     if (isPdf) {
-      // Create a visual indicator for PDF uploads
       const reader = new FileReader();
       reader.onload = (event) => {
         const result = event.target?.result as string;
@@ -124,7 +166,7 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
       const { dataUrl, width, height, file: compressedFile } = await compressImageFile(file, {
         maxWidth: 1200,
         maxHeight: 1200,
-        quality: 0.8,
+        quality: 0.85,
         format: 'image/webp',
       });
 
@@ -143,7 +185,7 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
         setBackSettings({ ...DEFAULT_SETTINGS });
       }
     } catch (err) {
-      console.warn('[VisitingCardDesignEditor] Compression fallback to FileReader:', err);
+      console.warn('[VisitingCardDesignEditor] Compression fallback:', err);
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
@@ -170,7 +212,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     }
   };
 
-  // Drag interaction
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!currentDataUrl) return;
     isDraggingRef.current = true;
@@ -182,7 +223,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     const dx = (e.clientX - dragStartRef.current.x) * 0.25;
     const dy = (e.clientY - dragStartRef.current.y) * 0.25;
     dragStartRef.current = { x: e.clientX, y: e.clientY };
-
     updateCurrentSettings((prev) => ({
       ...prev,
       x: Math.max(-60, Math.min(60, prev.x + dx)),
@@ -194,7 +234,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     isDraggingRef.current = false;
   };
 
-  // Touch drag interaction for mobile devices
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!currentDataUrl || e.touches.length !== 1) return;
     isDraggingRef.current = true;
@@ -206,7 +245,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     const dx = (e.touches[0].clientX - dragStartRef.current.x) * 0.25;
     const dy = (e.touches[0].clientY - dragStartRef.current.y) * 0.25;
     dragStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-
     updateCurrentSettings((prev) => ({
       ...prev,
       x: Math.max(-60, Math.min(60, prev.x + dx)),
@@ -218,30 +256,11 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     isDraggingRef.current = false;
   };
 
-  // Fit to canvas
-  const handleFitToCanvas = () => {
-    updateCurrentSettings(() => ({
-      x: 0,
-      y: 0,
-      scale: 1.0,
-      rotation: 0,
-    }));
-  };
+  const handleFitToCanvas = () => updateCurrentSettings(() => ({ x: 0, y: 0, scale: 1, rotation: 0 }));
+  const handleResetSettings = () => updateCurrentSettings(() => ({ ...DEFAULT_SETTINGS }));
+  const handleRotate90 = () =>
+    updateCurrentSettings((prev) => ({ ...prev, rotation: (prev.rotation + 90) % 360 }));
 
-  // Reset
-  const handleResetSettings = () => {
-    updateCurrentSettings(() => ({ ...DEFAULT_SETTINGS }));
-  };
-
-  // Rotate 90 deg
-  const handleRotate90 = () => {
-    updateCurrentSettings((prev) => ({
-      ...prev,
-      rotation: (prev.rotation + 90) % 360,
-    }));
-  };
-
-  // Clear current artwork
   const handleClearCurrent = () => {
     if (activeSide === 'front') {
       setFrontDataUrl(undefined);
@@ -256,7 +275,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     }
   };
 
-  // Copy front to back
   const handleCopyFrontToBack = () => {
     if (!frontDataUrl) return;
     setBackDataUrl(frontDataUrl);
@@ -267,7 +285,6 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     setActiveSide('back');
   };
 
-  // Print-ready high resolution download (300 DPI)
   const handleExportPrintReady = (side: 'front' | 'back') => {
     const dataUrl = side === 'front' ? frontDataUrl : backDataUrl;
     const settings = side === 'front' ? frontSettings : backSettings;
@@ -278,14 +295,11 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     setEditorError(null);
 
     const canvas = document.createElement('canvas');
-    // 92mm x 52mm @ 300 DPI = 1087 x 614 px (without bleed)
-    // 98mm x 58mm @ 300 DPI = 1157 x 685 px (with 3mm bleed)
     canvas.width = showBleed ? 1157 : 1087;
     canvas.height = showBleed ? 685 : 614;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clean white 300 GSM cardstock base
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -294,226 +308,240 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
     img.onload = () => {
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
-
-      const offsetX = (settings.x / 100) * canvas.width;
-      const offsetY = (settings.y / 100) * canvas.height;
-      ctx.translate(offsetX, offsetY);
+      ctx.translate((settings.x / 100) * canvas.width, (settings.y / 100) * canvas.height);
       ctx.rotate((settings.rotation * Math.PI) / 180);
 
       const imgAspect = img.width / img.height;
       const canvasAspect = canvas.width / canvas.height;
-
-      let drawW = canvas.width;
-      let drawH = canvas.height;
-
-      if (imgAspect > canvasAspect) {
-        drawW = canvas.width * settings.scale;
-        drawH = (canvas.width / imgAspect) * settings.scale;
-      } else {
-        drawH = canvas.height * settings.scale;
-        drawW = (canvas.height * imgAspect) * settings.scale;
-      }
+      const drawW =
+        imgAspect > canvasAspect
+          ? canvas.width * settings.scale
+          : canvas.height * imgAspect * settings.scale;
+      const drawH =
+        imgAspect > canvasAspect
+          ? (canvas.width / imgAspect) * settings.scale
+          : canvas.height * settings.scale;
 
       ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
 
       const printUrl = canvas.toDataURL('image/png', 1.0);
-      const downloadLink = document.createElement('a');
-      downloadLink.href = printUrl;
-      downloadLink.download = `Teqqno_VisitingCard_${side.toUpperCase()}_300DPI_${showBleed ? '98x58mm_Bleed' : '92x52mm'}.png`;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
+      const link = document.createElement('a');
+      link.href = printUrl;
+      link.download = `Teqqno_VisitingCard_${side.toUpperCase()}_300DPI_${showBleed ? '98x58mm_Bleed' : '92x52mm'}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     };
     img.src = dataUrl;
   };
 
+  const buildDesignState = (): VisitingCardDesignState => ({
+    frontDataUrl,
+    backDataUrl,
+    frontSettings,
+    backSettings,
+    paperGsm: 300,
+    widthMm: 92,
+    heightMm: 52,
+    withBleed: showBleed,
+    frontFileName,
+    backFileName,
+    frontLowRes,
+    backLowRes,
+  });
+
   const handleConfirmDone = () => {
-    onConfirm({
-      frontDataUrl,
-      backDataUrl,
-      frontSettings,
-      backSettings,
-      paperGsm: 300,
-      widthMm: 92,
-      heightMm: 52,
-      withBleed: showBleed,
-      frontFileName,
-      backFileName,
-      frontLowRes,
-      backLowRes,
-    });
+    onConfirm(buildDesignState(), artworkApproved);
     onClose();
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 md:p-5 overflow-hidden">
-      <div className="bg-[#FAF9FD] w-full max-w-6xl h-[100dvh] sm:h-auto sm:max-h-[94dvh] rounded-none sm:rounded-2xl border-0 sm:border border-zinc-200 shadow-2xl flex flex-col overflow-hidden">
-        
-        {/* Header */}
-        <div className="bg-white px-3.5 py-3 sm:px-5 sm:py-4 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 shrink-0">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#FF7A00]/10 border border-[#FF7A00]/25 flex items-center justify-center text-[#FF7A00] font-bold shrink-0">
-              <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                <h2 className="font-display font-bold text-sm sm:text-lg text-zinc-900 leading-tight">
-                  Visiting Card Design Editor
-                </h2>
-                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-200 shrink-0">
-                  300 GSM
-                </span>
-                <span className="hidden xs:inline-block bg-zinc-100 text-zinc-800 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border border-zinc-200 shrink-0">
-                  White Base ONLY
-                </span>
-              </div>
-              <p className="text-[11px] sm:text-xs text-zinc-500 truncate sm:whitespace-normal">
-                Print Size: <strong>92 × 52 MM</strong> · Optional 3 MM Bleed (98 × 58 MM)
-              </p>
-            </div>
-          </div>
+  const handleDirectCartClick = async () => {
+    const design = buildDesignState();
+    if (onDirectAddToCart) {
+      setIsAddingToCart(true);
+      try {
+        await onDirectAddToCart({ design, quantity: activeQty, artworkApproved });
+      } finally {
+        setTimeout(() => setIsAddingToCart(false), 1400);
+      }
+    } else {
+      handleConfirmDone();
+    }
+  };
 
-          <div className="flex items-center gap-2 ml-auto shrink-0">
-            <button
-              onClick={handleConfirmDone}
-              className="bg-[#FF7A00] hover:bg-[#e06c00] active:scale-98 text-white text-xs font-display font-bold px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl transition-all flex items-center gap-1.5 sm:gap-2 shadow-xs cursor-pointer"
-            >
-              <span className="hidden sm:inline">Confirm & Save Design</span>
-              <span className="sm:hidden">Save</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={onClose}
-              className="text-zinc-400 hover:text-zinc-700 p-2 rounded-lg hover:bg-zinc-100 transition-colors cursor-pointer"
-              title="Close editor"
-            >
-              <X className="w-5 h-5" />
-            </button>
+  return (
+    <div className="fixed inset-0 z-50 h-[100dvh] w-screen bg-[#F4F6FB] flex flex-col overflow-hidden select-none">
+      <input
+        type="file"
+        ref={activeSide === 'front' ? frontFileInputRef : backFileInputRef}
+        onChange={(e) => handleFileUpload(e, activeSide)}
+        accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf"
+        className="hidden"
+      />
+
+      {/* TOP NAVY BAR */}
+      <header className="h-14 bg-[#071B35] text-white px-2.5 sm:px-4 flex items-center justify-between gap-2 shrink-0 border-b border-white/10">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-[#FF7900] text-white font-extrabold text-xs flex items-center justify-center shrink-0">
+            TW
+          </div>
+          <div className="min-w-0 leading-tight">
+            <div className="flex items-center gap-2">
+              <span className="text-xs sm:text-sm font-extrabold text-white truncate">
+                Visiting Card Studio
+              </span>
+              <span className="hidden md:inline-flex px-2 py-0.5 rounded-full bg-white/10 text-[10px] font-bold text-orange-300 border border-white/10">
+                300 GSM Matte · White Base
+              </span>
+            </div>
+            <div className="text-[10px] sm:text-[11px] text-slate-300 truncate">
+              92 × 52 MM Trim · 98 × 58 MM Bleed · {activeQty} pcs
+            </div>
           </div>
         </div>
 
-        {editorError && (
-          <div className="bg-red-50 border-b border-red-200 px-4 py-2 flex items-center justify-between gap-2 text-xs text-red-800 shrink-0">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-              <span>{editorError}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setEditorError(null)}
-              className="text-red-500 hover:text-red-700 font-bold p-1 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleExportPrintReady(activeSide)}
+            disabled={!currentDataUrl}
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-40 text-xs font-bold cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 text-[#FF7900]" />
+            <span>Export 300 DPI</span>
+          </button>
 
-        {/* Sub-header navigation: Sides & Modes */}
-        <div className="bg-[#F0EFF5] px-3 sm:px-5 py-2.5 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 text-xs">
-          {/* Side Selector Tabs */}
-          <div className="flex items-center gap-1 sm:gap-1.5 bg-white p-1 rounded-xl border border-zinc-300 shadow-2xs">
-            <button
-              onClick={() => setActiveSide('front')}
-              className={`px-2.5 sm:px-4 py-1.5 rounded-lg font-display font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
-                activeSide === 'front'
-                  ? 'bg-[#0B0B0D] text-white shadow-xs'
-                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
-              }`}
-            >
-              <span>Front <span className="hidden xs:inline">Side </span>Design</span>
-              {frontDataUrl && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-            </button>
+          <button
+            type="button"
+            onClick={handleConfirmDone}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-extrabold cursor-pointer shadow-xs"
+          >
+            <Check className="w-3.5 h-3.5 stroke-[2.8]" />
+            <span className="hidden xs:inline">Save & Apply</span>
+            <span className="xs:hidden">Apply</span>
+          </button>
 
-            <button
-              onClick={() => setActiveSide('back')}
-              className={`px-2.5 sm:px-4 py-1.5 rounded-lg font-display font-bold transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer ${
-                activeSide === 'back'
-                  ? 'bg-[#0B0B0D] text-white shadow-xs'
-                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
-              }`}
-            >
-              <span>Back <span className="hidden xs:inline">Side </span>Design</span>
-              {backDataUrl && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer"
+            title="Close Studio"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
 
-          {/* Mode Selector */}
+      {editorError && (
+        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center justify-between gap-2 text-xs text-rose-800 shrink-0">
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-0.5 sm:gap-1 bg-white p-1 rounded-xl border border-zinc-300 shadow-2xs">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{editorError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditorError(null)}
+            className="text-rose-500 hover:text-rose-700 font-bold p-1 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* MAIN STUDIO WORKSPACE */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-y-auto lg:overflow-hidden min-h-0">
+        {/* LEFT + CENTER CANVAS WORKSPACE (7 cols on lg+) */}
+        <div className="lg:col-span-7 xl:col-span-8 bg-[#F4F6FB] flex flex-col min-h-0 lg:overflow-hidden">
+          {/* Sub-Toolbar: Sides, 2D / Mockup / 3D, Safe/Bleed Guides */}
+          <div className="px-3 sm:px-5 py-2.5 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+              {(['front', 'back'] as const).map((side) => {
+                const hasArt = side === 'front' ? Boolean(frontDataUrl) : Boolean(backDataUrl);
+                return (
+                  <button
+                    key={side}
+                    type="button"
+                    onClick={() => setActiveSide(side)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-extrabold capitalize flex items-center gap-1.5 cursor-pointer transition-all ${
+                      activeSide === side
+                        ? 'bg-[#071B35] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-[#071B35]'
+                    }`}
+                  >
+                    <span>{side} Side</span>
+                    {hasArt && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
               <button
+                type="button"
                 onClick={() => setPreviewMode('editor')}
-                className={`px-2 sm:px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1 sm:gap-1.5 cursor-pointer text-[11px] sm:text-xs ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 cursor-pointer ${
                   previewMode === 'editor'
-                    ? 'bg-[#FF7A00] text-white font-bold shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900'
+                    ? 'bg-[#FF7900] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-[#071B35]'
                 }`}
               >
                 <Sliders className="w-3.5 h-3.5" />
-                <span>2D <span className="hidden xs:inline">Design </span>Canvas</span>
+                <span>2D Studio</span>
               </button>
-
               <button
+                type="button"
                 onClick={() => setPreviewMode('mockup')}
-                className={`px-2 sm:px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1 sm:gap-1.5 cursor-pointer text-[11px] sm:text-xs ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 cursor-pointer ${
                   previewMode === 'mockup'
-                    ? 'bg-[#FF7A00] text-white font-bold shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900'
+                    ? 'bg-[#FF7900] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-[#071B35]'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span><span className="hidden xs:inline">Realistic </span>2D Mockup</span>
+                <span>2D Mockup</span>
               </button>
-
               <button
+                type="button"
                 onClick={() => setPreviewMode('3d')}
-                className={`px-2 sm:px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1 sm:gap-1.5 cursor-pointer text-[11px] sm:text-xs ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 cursor-pointer ${
                   previewMode === '3d'
-                    ? 'bg-[#FF7A00] text-white font-bold shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900'
+                    ? 'bg-[#FF7900] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-[#071B35]'
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>3D <span className="hidden xs:inline">Preview</span></span>
+                <span>3D Card</span>
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Main Work Area */}
-        <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-12 min-h-0">
-          
-          {/* Left Canvas Display (7 cols) */}
-          <div className="lg:col-span-7 bg-[#EFEFF4] p-3.5 sm:p-5 lg:p-6 flex flex-col items-center justify-center relative overflow-hidden select-none lg:overflow-y-auto">
-            
-            {/* Guide controls & dimensions header */}
-            <div className="w-full max-w-xl flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600 mb-3 px-1">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="font-mono font-bold text-zinc-900">
-                  {activeSide === 'front' ? 'FRONT SIDE' : 'BACK SIDE'}
+          {/* Canvas Display */}
+          <div className="flex-1 flex flex-col items-center justify-center p-3.5 sm:p-6 lg:overflow-y-auto">
+            <div className="w-full max-w-xl flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="font-mono font-extrabold text-[#071B35] uppercase">
+                  {activeSide} · 92 × 52 MM
                 </span>
-                <span className="text-zinc-400">·</span>
-                <span className="font-mono text-zinc-500">92 × 52 mm</span>
               </div>
 
               {previewMode === 'editor' && (
-                <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
-                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-zinc-700">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-[#071B35]">
                     <input
                       type="checkbox"
                       checked={showSafeZone}
                       onChange={(e) => setShowSafeZone(e.target.checked)}
-                      className="rounded text-[#FF7A00] focus:ring-[#FF7A00]"
+                      className="accent-[#FF7900]"
                     />
                     <span>Safe Zone (3mm)</span>
                   </label>
-
-                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-zinc-700">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-[#071B35]">
                     <input
                       type="checkbox"
                       checked={showBleed}
                       onChange={(e) => setShowBleed(e.target.checked)}
-                      className="rounded text-[#FF7A00] focus:ring-[#FF7A00]"
+                      className="accent-[#FF7900]"
                     />
                     <span>Bleed Guide (3mm)</span>
                   </label>
@@ -521,44 +549,37 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
               )}
             </div>
 
-            {/* View A: 2D Interactive Canvas Editor */}
             {previewMode === 'editor' && (
               <div className="w-full max-w-xl flex flex-col items-center">
-                
-                {/* Outer Bleed Container (98 x 58 mm ratio) */}
                 <div
-                  className={`relative w-full aspect-[92/52] max-w-[520px] rounded-lg transition-all shadow-xl bg-white flex items-center justify-center ${
-                    showBleed ? 'p-3 border-2 border-dashed border-amber-400 bg-amber-50/20' : 'border border-zinc-300'
+                  className={`relative w-full aspect-[92/52] max-w-[540px] rounded-xl transition-all shadow-xl bg-white flex items-center justify-center ${
+                    showBleed
+                      ? 'p-3 border-2 border-dashed border-amber-400 bg-amber-50/20'
+                      : 'border border-slate-300'
                   }`}
                 >
-                  {/* Finished Trim Line (92 x 52 mm boundary) */}
                   <div
                     ref={cardCanvasRef}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
                     onTouchEnd={handleTouchEnd}
-                    onTouchCancel={handleTouchEnd}
-                    className="relative w-full h-full bg-white rounded-md border-2 border-zinc-900 overflow-hidden shadow-sm cursor-grab active:cursor-grabbing flex items-center justify-center touch-none"
-                    style={{
-                      boxShadow: '0 4px 18px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0,0,0,0.05)',
-                    }}
+                    className="relative w-full h-full bg-white rounded-md border-2 border-[#071B35] overflow-hidden shadow-xs cursor-grab active:cursor-grabbing flex items-center justify-center touch-none"
                   >
-                    {/* Safe Margin Guide (3 mm inside trim line) */}
                     {showSafeZone && (
                       <div className="absolute inset-3 border border-dashed border-emerald-500/80 rounded-xs pointer-events-none z-20 flex flex-col justify-between p-1">
-                        <span className="text-[9px] font-mono text-emerald-700 font-bold bg-white/80 px-1 rounded-xs self-start">
+                        <span className="text-[9px] font-mono text-emerald-700 font-bold bg-white/85 px-1 rounded self-start">
                           Safe Zone (Keep text inside)
                         </span>
-                        <span className="text-[9px] font-mono text-zinc-400 self-end">
-                          Trim Edge: 92×52mm
+                        <span className="text-[9px] font-mono text-slate-400 self-end">
+                          Trim: 92×52mm
                         </span>
                       </div>
                     )}
 
-                    {/* Artwork Render */}
                     {currentDataUrl ? (
                       <div
                         className="absolute inset-0 flex items-center justify-center pointer-events-none"
@@ -574,46 +595,33 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
                         />
                       </div>
                     ) : (
-                      /* Blank card placeholder */
                       <div className="flex flex-col items-center justify-center text-center p-6 space-y-2 pointer-events-none">
-                        <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
-                          <Upload className="w-6 h-6 stroke-[1.5]" />
+                        <div className="w-12 h-12 rounded-2xl bg-orange-50 flex items-center justify-center text-[#FF7900]">
+                          <Upload className="w-6 h-6" />
                         </div>
-                        <div className="font-display font-bold text-sm text-zinc-800">
+                        <div className="font-bold text-sm text-[#071B35]">
                           No {activeSide === 'front' ? 'Front' : 'Back'} Artwork Uploaded
                         </div>
-                        <p className="text-[11px] text-zinc-500 max-w-xs">
-                          Click <strong>"Upload {activeSide === 'front' ? 'Front' : 'Back'} Artwork"</strong> on the right to place your design onto the pure white 300 GSM art paper.
+                        <p className="text-[11px] text-slate-500 max-w-xs">
+                          Upload PNG, JPG or PDF to preview your card on 300 GSM white art stock.
                         </p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Canvas bottom hint */}
-                <div className="flex flex-wrap items-center justify-between gap-2 w-full max-w-[520px] text-[10px] sm:text-[11px] text-zinc-500 mt-3 font-mono">
-                  <span>Drag design to reposition</span>
-                  <span>Zoom: {Math.round(currentSettings.scale * 100)}%</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 w-full max-w-[540px] text-[11px] text-slate-500 mt-3 font-mono">
+                  <span>Drag artwork to reposition</span>
+                  <span>Scale: {Math.round(currentSettings.scale * 100)}%</span>
                   <span>Rotation: {currentSettings.rotation}°</span>
                 </div>
               </div>
             )}
 
-            {/* View B: Realistic 2D Mockup */}
             {previewMode === 'mockup' && (
-              <div className="w-full max-w-xl flex flex-col items-center justify-center py-6 px-2 sm:px-4">
-                <div className="relative group perspective-1000 w-full max-w-[460px] flex items-center justify-center">
-                  {/* Shadow stack undercard */}
-                  <div className="absolute top-2 left-2 w-full aspect-[92/52] bg-zinc-200/90 rounded-md rotate-1 blur-[1px] -z-10 shadow-lg" />
-                  <div className="absolute top-1 left-1 w-full aspect-[92/52] bg-zinc-100/90 rounded-md -rotate-1 -z-10 shadow-md" />
-
-                  {/* Main Card */}
-                  <div
-                    className="w-full aspect-[92/52] bg-white rounded-md border border-zinc-200/90 shadow-2xl relative overflow-hidden flex items-center justify-center"
-                    style={{
-                      boxShadow: '0 25px 40px -15px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0,0,0,0.2)',
-                    }}
-                  >
+              <div className="w-full max-w-xl flex flex-col items-center justify-center py-6">
+                <div className="relative w-full max-w-[460px] flex items-center justify-center">
+                  <div className="w-full aspect-[92/52] bg-white rounded-lg border border-slate-200 shadow-2xl relative overflow-hidden flex items-center justify-center">
                     {currentDataUrl ? (
                       <div
                         className="w-full h-full flex items-center justify-center"
@@ -623,34 +631,30 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
                       >
                         <img
                           src={currentDataUrl}
-                          alt="Visiting Card Preview"
+                          alt="Visiting Card Mockup"
                           className="max-w-full max-h-full object-contain"
                         />
                       </div>
                     ) : (
-                      <div className="text-center text-zinc-400 text-xs font-mono">
+                      <div className="text-center text-slate-400 text-xs font-mono">
                         Blank 300 GSM White Art Paper ({activeSide.toUpperCase()})
                       </div>
                     )}
-
-                    {/* Paper subtle sheen overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-tr from-black/2 via-transparent to-white/10 pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-black/3 via-transparent to-white/15 pointer-events-none" />
                   </div>
                 </div>
 
-                <div className="mt-6 flex items-center gap-3">
-                  <button
-                    onClick={() => setActiveSide((prev) => (prev === 'front' ? 'back' : 'front'))}
-                    className="bg-white hover:bg-zinc-50 border border-zinc-300 px-4 py-2 rounded-xl text-xs font-bold text-zinc-800 shadow-xs flex items-center gap-2 cursor-pointer"
-                  >
-                    <RotateCw className="w-4 h-4 text-[#FF7A00]" />
-                    <span>Flip to {activeSide === 'front' ? 'Back View' : 'Front View'}</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSide((prev) => (prev === 'front' ? 'back' : 'front'))}
+                  className="mt-5 bg-[#071B35] hover:bg-[#0e2d54] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 cursor-pointer"
+                >
+                  <RotateCw className="w-4 h-4 text-[#FF7900]" />
+                  <span>Flip to {activeSide === 'front' ? 'Back View' : 'Front View'}</span>
+                </button>
               </div>
             )}
 
-            {/* View C: Three.js Interactive 3D Canvas */}
             {previewMode === '3d' && (
               <div className="w-full max-w-xl flex flex-col items-center">
                 <VisitingCard3DCanvas
@@ -659,32 +663,31 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
                   frontSettings={frontSettings}
                   backSettings={backSettings}
                   initialView={activeSide}
-                  className="w-full h-[240px] sm:h-[320px] lg:h-[360px]"
+                  className="w-full h-[250px] sm:h-[340px] lg:h-[380px]"
                 />
               </div>
             )}
-
           </div>
+        </div>
 
-          {/* Right Controls Panel (5 cols) */}
-          <div className="lg:col-span-5 bg-white p-4 sm:p-5 lg:p-6 border-t lg:border-t-0 lg:border-l border-zinc-200 lg:overflow-y-auto space-y-5">
-            
-            {/* Active Side Heading */}
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+        {/* RIGHT CONTROLS & ORDER PANEL (5 cols on lg+) */}
+        <div className="lg:col-span-5 xl:col-span-4 bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col h-full overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Quick Upload Card */}
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
               <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-[#FF7A00] font-bold">
-                  Card Face Configuration
-                </span>
-                <h3 className="font-display font-bold text-base text-zinc-900">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-[#FF7900]">
+                  300 GSM Matte Art Paper
+                </div>
+                <h3 className="font-bold text-sm text-[#071B35]">
                   {activeSide === 'front' ? 'Front Side Artwork' : 'Back Side Artwork'}
                 </h3>
               </div>
-
               {currentDataUrl && (
                 <button
+                  type="button"
                   onClick={handleClearCurrent}
-                  className="text-red-500 hover:text-red-700 text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
-                  title="Remove this artwork"
+                  className="text-rose-600 hover:text-rose-700 text-xs flex items-center gap-1 font-bold cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>Remove</span>
@@ -692,262 +695,313 @@ export const VisitingCardDesignEditor: React.FC<VisitingCardDesignEditorProps> =
               )}
             </div>
 
-            {/* Upload Area */}
-            <div className="space-y-2">
-              <input
-                type="file"
-                ref={activeSide === 'front' ? frontFileInputRef : backFileInputRef}
-                onChange={(e) => handleFileUpload(e, activeSide)}
-                accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf"
-                className="hidden"
-              />
-
-              <div
-                onClick={() => {
-                  if (activeSide === 'front') {
-                    frontFileInputRef.current?.click();
-                  } else {
-                    backFileInputRef.current?.click();
-                  }
-                }}
-                className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
-                  currentDataUrl
-                    ? 'border-emerald-300 bg-emerald-50/30 hover:bg-emerald-50/50'
-                    : 'border-zinc-300 bg-zinc-50 hover:bg-zinc-100 hover:border-[#FF7A00]'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-full bg-white shadow-2xs mx-auto flex items-center justify-center text-[#FF7A00] mb-2">
-                  <Upload className="w-5 h-5 stroke-[2]" />
-                </div>
-
-                <div className="text-xs font-bold text-zinc-900">
-                  {currentDataUrl
-                    ? `Replace ${activeSide === 'front' ? 'Front' : 'Back'} Artwork`
-                    : `Upload ${activeSide === 'front' ? 'Front' : 'Back'} Artwork`}
-                </div>
-                <div className="text-[10px] text-zinc-500 mt-0.5">
-                  Supports PNG, JPG, JPEG & PDF (300 DPI Recommended)
-                </div>
-
-                {currentFileName && (
-                  <div className="mt-2 text-[11px] font-mono text-emerald-700 font-semibold truncate max-w-xs mx-auto bg-white/80 px-2 py-0.5 rounded border border-emerald-200">
-                    📎 {currentFileName}
-                  </div>
-                )}
+            <div
+              onClick={() =>
+                activeSide === 'front'
+                  ? frontFileInputRef.current?.click()
+                  : backFileInputRef.current?.click()
+              }
+              className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition-all ${
+                currentDataUrl
+                  ? 'border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50/60'
+                  : 'border-slate-300 bg-slate-50 hover:border-[#FF7900] hover:bg-orange-50/30'
+              }`}
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#071B35] text-white mx-auto flex items-center justify-center mb-2 shadow-xs">
+                <Upload className="w-4 h-4 text-[#FF7900]" />
               </div>
+              <div className="text-xs font-extrabold text-[#071B35]">
+                {currentDataUrl
+                  ? `Replace ${activeSide === 'front' ? 'Front' : 'Back'} Artwork`
+                  : `Upload ${activeSide === 'front' ? 'Front' : 'Back'} Artwork`}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                PNG, JPG, JPEG & PDF · 300 DPI Recommended
+              </div>
+              {currentFileName && (
+                <div className="mt-2 text-[11px] font-mono text-emerald-700 font-bold truncate bg-white px-2.5 py-1 rounded-lg border border-emerald-200 inline-block max-w-full">
+                  {currentFileName}
+                </div>
+              )}
             </div>
 
-            {/* Resolution Warning / Quality Banner */}
             {currentDataUrl && (
               <div
-                className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
                   currentLowRes
                     ? 'bg-amber-50 border-amber-200 text-amber-900'
                     : 'bg-emerald-50 border-emerald-200 text-emerald-900'
                 }`}
               >
                 {currentLowRes ? (
-                  <>
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-[11px]">Advisory: Resolution Under 300 DPI</div>
-                      <p className="text-[10px] text-amber-800 leading-relaxed">
-                        Your image resolution ({currentDim?.width} × {currentDim?.height} px) is lower than the recommended 1087 × 614 px. Fine fonts may print slightly soft.
-                      </p>
-                    </div>
-                  </>
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-[11px]">High Print Resolution Verified</div>
-                      <p className="text-[10px] text-emerald-800 leading-relaxed">
-                        Ready for 300 DPI digital press printing ({currentDim?.width} × {currentDim?.height} px). Text will be razor sharp.
-                      </p>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                )}
+                <div className="text-[11px]">
+                  <div className="font-bold">
+                    {currentLowRes ? 'Resolution Under 300 DPI' : '300 DPI Press Quality Verified'}
+                  </div>
+                  {currentDim && (
+                    <div className="opacity-80">
+                      {currentDim.width} × {currentDim.height} px (Recommended: 1087 × 614 px)
                     </div>
-                  </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Up-Top Transform Controls */}
+            {currentDataUrl && (
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#071B35]">
+                  Position, Zoom & Rotation
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateCurrentSettings((prev) => ({
+                        ...prev,
+                        scale: Math.max(0.4, Number((prev.scale - 0.05).toFixed(2))),
+                      }))
+                    }
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-[#071B35] cursor-pointer"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                  <input
+                    type="range"
+                    min="0.4"
+                    max="2.5"
+                    step="0.05"
+                    value={currentSettings.scale}
+                    onChange={(e) =>
+                      updateCurrentSettings((prev) => ({
+                        ...prev,
+                        scale: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="flex-1 accent-[#FF7900]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateCurrentSettings((prev) => ({
+                        ...prev,
+                        scale: Math.min(2.5, Number((prev.scale + 0.05).toFixed(2))),
+                      }))
+                    }
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-[#071B35] cursor-pointer"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="text-[11px] font-mono font-bold text-[#FF7900] w-10 text-right">
+                    {Math.round(currentSettings.scale * 100)}%
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleRotate90}
+                    className="py-1.5 px-2 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-[#071B35] flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <RotateCw className="w-3 h-3 text-[#FF7900]" />
+                    <span>+90°</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFitToCanvas}
+                    className="py-1.5 px-2 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-[#071B35] flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Maximize2 className="w-3 h-3 text-[#FF7900]" />
+                    <span>Fit Card</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetSettings}
+                    className="py-1.5 px-2 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-[#071B35] flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3 text-slate-500" />
+                    <span>Center</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {activeSide === 'back' && frontDataUrl && !backDataUrl && (
+              <div className="bg-orange-50/70 border border-orange-200 rounded-xl p-3 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-[#071B35]">Copy Front Design to Back?</span>
+                <button
+                  type="button"
+                  onClick={handleCopyFrontToBack}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#071B35] text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  <Copy className="w-3 h-3 text-[#FF7900]" />
+                  <span>Copy</span>
+                </button>
+              </div>
+            )}
+
+            {/* SLAB PRICING (100 / 200 / 500 / 1000 / 2000 pcs) */}
+            <div className="space-y-2.5 pt-2 border-t border-slate-100">
+              <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#071B35]">
+                Pack Quantity & Bulk Pricing
+              </div>
+
+              <div className="grid grid-cols-5 gap-1">
+                {QUICK_QUANTITIES.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => setQty(q)}
+                    className={`py-1.5 rounded-lg border text-[11px] font-extrabold cursor-pointer transition-all ${
+                      activeQty === q
+                        ? 'bg-[#071B35] text-white border-[#071B35]'
+                        : 'bg-white text-[#071B35] border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+
+              <div className="p-3 rounded-2xl border border-slate-200 bg-white space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+                    <button
+                      type="button"
+                      onClick={() => setQty(Math.max(100, activeQty - 100))}
+                      className="w-8 h-8 font-bold text-[#071B35] hover:bg-slate-100 cursor-pointer"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min={100}
+                      step={100}
+                      value={activeQty}
+                      onChange={(e) => setQty(Math.max(100, Number(e.target.value) || 100))}
+                      className="w-14 text-center text-xs font-extrabold text-[#071B35] bg-transparent outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setQty(activeQty + 100)}
+                      className="w-8 h-8 font-bold text-[#071B35] hover:bg-slate-100 cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-lg font-extrabold text-[#071B35] font-mono leading-tight">
+                      {formatCurrencyINR(pricing.totalPrice)}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      ₹{pricing.unitPrice}/card · Incl. 18% GST
+                    </div>
+                  </div>
+                </div>
+
+                {pricing.nextTierUpsell && (
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <span className="text-[11px] font-bold text-emerald-900">
+                      Make {pricing.nextTierUpsell.minQty} → ₹{pricing.nextTierUpsell.price}/card
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setQty(pricing.nextTierUpsell!.minQty)}
+                      className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-extrabold cursor-pointer"
+                    >
+                      Upgrade
+                    </button>
+                  </div>
                 )}
               </div>
-            )}
 
-            {/* Transform Controls (Zoom, Rotate, Reposition) */}
-            {currentDataUrl && (
-              <div className="space-y-4 pt-2 border-t border-zinc-100">
-                <div className="text-xs font-bold text-zinc-900 font-mono uppercase tracking-wide">
-                  Artwork Adjustments
-                </div>
-
-                {/* Scale / Zoom Slider */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-700">
-                    <span className="font-medium">Zoom & Scale</span>
-                    <span className="font-mono font-bold text-[#FF7A00]">
-                      {Math.round(currentSettings.scale * 100)}%
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() =>
-                        updateCurrentSettings((prev) => ({
-                          ...prev,
-                          scale: Math.max(0.4, Number((prev.scale - 0.05).toFixed(2))),
-                        }))
-                      }
-                      className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-600 cursor-pointer"
-                      title="Zoom Out"
-                    >
-                      <ZoomOut className="w-3.5 h-3.5" />
-                    </button>
-
-                    <input
-                      type="range"
-                      min="0.4"
-                      max="2.5"
-                      step="0.05"
-                      value={currentSettings.scale}
-                      onChange={(e) =>
-                        updateCurrentSettings((prev) => ({
-                          ...prev,
-                          scale: parseFloat(e.target.value),
-                        }))
-                      }
-                      className="flex-1 accent-[#FF7A00] cursor-pointer"
-                    />
-
-                    <button
-                      onClick={() =>
-                        updateCurrentSettings((prev) => ({
-                          ...prev,
-                          scale: Math.min(2.5, Number((prev.scale + 0.05).toFixed(2))),
-                        }))
-                      }
-                      className="p-1.5 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-600 cursor-pointer"
-                      title="Zoom In"
-                    >
-                      <ZoomIn className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Rotation Slider */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs text-zinc-700">
-                    <span className="font-medium">Rotation</span>
-                    <span className="font-mono font-bold text-zinc-900">
-                      {currentSettings.rotation}°
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min="-180"
-                      max="180"
-                      step="5"
-                      value={currentSettings.rotation}
-                      onChange={(e) =>
-                        updateCurrentSettings((prev) => ({
-                          ...prev,
-                          rotation: parseInt(e.target.value),
-                        }))
-                      }
-                      className="flex-1 accent-[#FF7A00] cursor-pointer"
-                    />
-
-                    <button
-                      onClick={handleRotate90}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-700 flex items-center gap-1 cursor-pointer shrink-0"
-                      title="Rotate 90 degrees clockwise"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span>+90°</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Alignment Actions: Fit to Canvas & Reset */}
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    onClick={handleFitToCanvas}
-                    className="w-full py-2 px-3 rounded-lg border border-zinc-300 hover:bg-zinc-50 text-xs font-bold text-zinc-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5 text-[#FF7A00]" />
-                    <span>Fit to Canvas</span>
-                  </button>
-
-                  <button
-                    onClick={handleResetSettings}
-                    className="w-full py-2 px-3 rounded-lg border border-zinc-300 hover:bg-zinc-50 text-xs font-bold text-zinc-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-zinc-500" />
-                    <span>Reset Center</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Quick Utility: Copy Front Design to Back */}
-            {activeSide === 'back' && frontDataUrl && !backDataUrl && (
-              <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 space-y-2">
-                <div className="text-xs font-bold text-amber-900">
-                  Same Design on Back Side?
-                </div>
-                <p className="text-[11px] text-amber-800">
-                  You can independently upload a different back design, or copy your front design here with 1 click.
-                </p>
-                <button
-                  onClick={handleCopyFrontToBack}
-                  className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
-                >
-                  Copy Front Design to Back
-                </button>
-              </div>
-            )}
-
-            {/* Print-Ready Export Section */}
-            <div className="pt-3 border-t border-zinc-100 space-y-2">
-              <div className="text-xs font-bold text-zinc-900 font-mono uppercase tracking-wide flex items-center justify-between">
-                <span>Production Files</span>
-                <span className="text-[10px] text-emerald-600 font-semibold">300 DPI Export</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => handleExportPrintReady('front')}
-                  disabled={!frontDataUrl}
-                  className="py-2 px-2.5 rounded-lg border border-zinc-300 hover:border-zinc-400 bg-white text-zinc-800 text-[11px] font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-[#FF7A00]" />
-                  <span>Export Front (300 DPI)</span>
-                </button>
-
-                <button
-                  onClick={() => handleExportPrintReady('back')}
-                  disabled={!backDataUrl}
-                  className="py-2 px-2.5 rounded-lg border border-zinc-300 hover:border-zinc-400 bg-white text-zinc-800 text-[11px] font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-[#FF7A00]" />
-                  <span>Export Back (300 DPI)</span>
-                </button>
+              <div className="flex items-center justify-between text-[11px] text-slate-600">
+                <span className="flex items-center gap-1.5 font-semibold">
+                  <Truck className="w-3.5 h-3.5 text-[#FF7900]" />
+                  Dispatch: 24–48 hrs
+                </span>
+                <span className="font-bold text-[#071B35]">Delhivery Express</span>
               </div>
             </div>
 
-            {/* Bottom Finalize Button */}
-            <div className="pt-3 border-t border-zinc-200">
+            {/* Print Export & Artwork Approval */}
+            <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={handleConfirmDone}
-                className="w-full bg-[#FF7A00] hover:bg-[#e06c00] active:scale-98 text-white text-sm font-display font-bold py-3.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                type="button"
+                onClick={() => handleExportPrintReady('front')}
+                disabled={!frontDataUrl}
+                className="py-2 px-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-[#071B35] text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                <span>Save & Confirm Visiting Card</span>
-                <ArrowRight className="w-4 h-4" />
+                <Download className="w-3.5 h-3.5 text-[#FF7900]" />
+                <span>Front 300 DPI</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportPrintReady('back')}
+                disabled={!backDataUrl}
+                className="py-2 px-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-[#071B35] text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-[#FF7900]" />
+                <span>Back 300 DPI</span>
               </button>
             </div>
 
+            <label className="flex items-start gap-2.5 p-3 rounded-2xl border border-slate-200 bg-slate-50 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={artworkApproved}
+                onChange={(e) => setArtworkApproved(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-[#FF7900] cursor-pointer"
+              />
+              <div className="space-y-0.5">
+                <div className="text-xs font-extrabold text-[#071B35] flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Approve Artwork Preview</span>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  I verify safe zone margins, bleed & card details are ready for press printing.
+                </p>
+              </div>
+            </label>
           </div>
 
-        </div>
+          {/* Bottom Checkout Bar */}
+          <div className="p-3.5 border-t border-slate-200 bg-white space-y-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleDirectCartClick}
+              disabled={isAddingToCart}
+              className="w-full py-3 px-4 rounded-xl bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-extrabold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+            >
+              {isAddingToCart ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Added to Cart!</span>
+                </>
+              ) : (
+                <>
+                  <ShoppingCart className="w-4 h-4" />
+                  <span>Add to Cart · {formatCurrencyINR(pricing.totalPrice)}</span>
+                </>
+              )}
+            </button>
 
+            <button
+              type="button"
+              onClick={handleConfirmDone}
+              className="w-full py-2.5 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-[#071B35] text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>Apply Design & Return to Product Page</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

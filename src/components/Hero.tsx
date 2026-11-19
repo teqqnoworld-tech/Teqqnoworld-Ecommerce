@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowRight, Sparkles, CheckCircle2, Clock, Truck, FileText, Star, ShieldCheck } from 'lucide-react';
 import { OrbitalProductSpinner } from './OrbitalProductSpinner';
+import { DelhiveryPincodeChecker } from './DelhiveryPincodeChecker';
 
 interface HeroProps {
   onStartCustomizing: () => void;
@@ -171,6 +172,9 @@ export const Hero: React.FC<HeroProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 3. Interactive Delhivery Serviceability Checker for Storefront Visitors */}
+      <DelhiveryPincodeChecker variant="banner" />
     </div>
   );
 };

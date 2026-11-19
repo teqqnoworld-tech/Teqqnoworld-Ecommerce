@@ -323,5 +323,15 @@ export interface Order {
     customerSent?: boolean;
     adminSent?: boolean;
   };
+  whatsappActionStatus?: 'pending' | 'confirmed' | 'cancelled';
+  whatsappNotification?: {
+    status: 'sent' | 'simulated' | 'failed';
+    phone?: string;
+    message?: string;
+    confirmUrl?: string;
+    cancelUrl?: string;
+    previewMessage?: string;
+  };
 }
+
 

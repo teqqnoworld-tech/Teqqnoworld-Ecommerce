@@ -44,6 +44,11 @@ import {
   getDelhiveryLabelUrl,
 } from '../../services/paymentAndLogisticsService';
 import {
+  AiSensyStatusResponse,
+  WhatsAppDispatchLogItem,
+  sendCheckoutDropRecoveryWhatsApp,
+} from '../../services/aisensyService';
+import {
   AdminSection,
   STATUS_META,
   parseOrderNotes,
@@ -810,6 +815,38 @@ export const MarketingRecoveryView: React.FC<{
                         <span>WhatsApp</span>
                       </a>
                     )}
+                    {leadPhone && !lead.recovered && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await sendCheckoutDropRecoveryWhatsApp({
+                            checkoutSessionId: `admin_${lead.id}_${Date.now()}`,
+                            customerName: leadName,
+                            phone: leadPhone,
+                            cartTotal: Number(lead.cart_total || 0),
+                            couponCode: 'SAVE5NOW',
+                            discountPercent: 5,
+                            validMinutes: 15,
+                            triggerReason: 'admin_followup',
+                          });
+                          if (typeof window !== 'undefined') {
+                            window.dispatchEvent(
+                              new CustomEvent('teqqno:admin-toast', {
+                                detail: {
+                                  type: res.success ? 'success' : 'error',
+                                  message: res.message,
+                                },
+                              })
+                            );
+                          }
+                        }}
+                        className="px-3 py-2 rounded-xl bg-[#FF7900]/10 hover:bg-[#FF7900] text-[#FF7900] hover:text-white border border-[#FF7900]/30 text-xs font-semibold flex items-center gap-1.5 cursor-pointer min-h-[40px] transition-colors"
+                        title="Send Limited-Time 5% OFF Coupon (SAVE5NOW) via AiSensy WhatsApp API"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Send 5% OFF (AiSensy)</span>
+                      </button>
+                    )}
                     {!lead.recovered && (
                       <button
                         onClick={() => onRecoverLead(lead.id)}
@@ -1379,6 +1416,14 @@ export const IntegrationsSetupView: React.FC<{
   smtpStatus: SmtpStatusResponse | null;
   razorpayStatus: RazorpayStatus | null;
   delhiveryStatus: DelhiveryStatus | null;
+  aisensyStatus: AiSensyStatusResponse | null;
+  aisensyLogs: WhatsAppDispatchLogItem[];
+  testWaPhone: string;
+  setTestWaPhone: (v: string) => void;
+  testingAiSensy: boolean;
+  aisensyTestResult: { success: boolean; message: string } | null;
+  onTestAiSensy: (testType?: 'order_confirmation' | 'checkout_drop_5off') => void;
+  onRefreshAiSensyLogs: () => void;
   testEmailInput: string;
   setTestEmailInput: (v: string) => void;
   testingSmtp: boolean;
@@ -1392,6 +1437,14 @@ export const IntegrationsSetupView: React.FC<{
   smtpStatus,
   razorpayStatus,
   delhiveryStatus,
+  aisensyStatus,
+  aisensyLogs,
+  testWaPhone,
+  setTestWaPhone,
+  testingAiSensy,
+  aisensyTestResult,
+  onTestAiSensy,
+  onRefreshAiSensyLogs,
   testEmailInput,
   setTestEmailInput,
   testingSmtp,
@@ -1403,9 +1456,164 @@ export const IntegrationsSetupView: React.FC<{
   onOpenDispatchTab,
 }) => {
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+
+  const webhookFullUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${aisensyStatus?.webhookPath || '/api/aisensy/webhook'}`
+      : 'https://teqqnoworld.com/api/aisensy/webhook';
 
   return (
     <div className="space-y-6 animate-admin-fade-up">
+      {/* AiSensy WhatsApp Business Automation Card */}
+      <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-2xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display font-bold text-base text-[#071B35] flex items-center gap-2">
+              <WhatsAppIcon className="w-5 h-5 text-[#1EBE5D]" />
+              <span>AiSensy WhatsApp API (Order Confirm/Cancel &amp; 5% OFF Checkout Saver)</span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Auto-sends WhatsApp order confirmations with Confirm/Cancel options AND limited-time 5% OFF coupon (SAVE5NOW) if buyer cancels payment or backs out at checkout.
+            </p>
+          </div>
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-mono font-semibold border ${
+              aisensyStatus?.configured
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-amber-50 text-amber-800 border-amber-200'
+            }`}
+          >
+            {aisensyStatus?.configured ? 'AISENSY LIVE CONNECTED' : 'SIMULATION MODE (ADD AISENSY_API_KEY)'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+            <div className="text-[11px] text-slate-500">Order Confirmation Campaign</div>
+            <div className="font-mono font-semibold text-[#071B35] mt-1 truncate">
+              {aisensyStatus?.orderConfirmCampaign || 'order_confirmation_action'}
+            </div>
+          </div>
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+            <div className="text-[11px] text-slate-500">5% OFF Drop Campaign</div>
+            <div className="font-mono font-semibold text-[#FF7900] mt-1 truncate">
+              {aisensyStatus?.checkoutDropCampaign || 'checkout_drop_5_off'}
+            </div>
+          </div>
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+            <div className="text-[11px] text-slate-500">Incoming Webhook URL (For Quick Replies)</div>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <span className="font-mono text-[11px] text-[#071B35] truncate">{webhookFullUrl}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(webhookFullUrl);
+                  setCopiedWebhook(true);
+                  setTimeout(() => setCopiedWebhook(false), 2500);
+                }}
+                className="text-[#FF7900] hover:underline font-semibold shrink-0 cursor-pointer"
+              >
+                {copiedWebhook ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-wrap">
+          <input
+            type="tel"
+            value={testWaPhone}
+            onChange={(e) => setTestWaPhone(e.target.value)}
+            placeholder="Enter 10-digit WhatsApp number for AiSensy test..."
+            className="flex-1 min-w-[200px] bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs font-mono text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => onTestAiSensy('order_confirmation')}
+            disabled={testingAiSensy}
+            className="bg-[#1EBE5D] hover:bg-[#19a851] text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>{testingAiSensy ? 'Sending...' : 'Test Order Confirm'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onTestAiSensy('checkout_drop_5off')}
+            disabled={testingAiSensy}
+            className="bg-[#FF7900] hover:bg-[#e56d00] text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>{testingAiSensy ? 'Sending...' : 'Test 5% OFF Drop'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onRefreshAiSensyLogs}
+            className="bg-slate-100 hover:bg-slate-200 text-[#071B35] text-xs font-semibold px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+          >
+            Refresh Logs ({aisensyLogs.length})
+          </button>
+        </div>
+
+        {aisensyTestResult && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+              aisensyTestResult.success
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            {aisensyTestResult.success ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            )}
+            <span>{aisensyTestResult.message}</span>
+          </div>
+        )}
+
+        {aisensyLogs.length > 0 && (
+          <div className="border-t border-slate-100 pt-3 space-y-2">
+            <div className="text-[11px] font-bold text-[#071B35] uppercase tracking-wider">
+              Recent AiSensy WhatsApp Events &amp; Confirm/Cancel Activity
+            </div>
+            <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+              {aisensyLogs.slice(0, 10).map((log) => (
+                <div
+                  key={log.id}
+                  className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-xs space-y-1"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-[#071B35]">+{log.phone}</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-600">
+                        {log.type}
+                      </span>
+                      {log.orderNumber && (
+                        <span className="text-[10px] font-mono font-bold text-[#FF7900]">
+                          #{log.orderNumber}
+                        </span>
+                      )}
+                      {log.couponCode && (
+                        <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                          {log.couponCode}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {log.status.toUpperCase()} · {new Date(log.createdAt).toLocaleTimeString('en-IN')}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 line-clamp-2 whitespace-pre-line">
+                    {log.messagePreview}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Hostinger SMTP Card */}
       <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-2xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">

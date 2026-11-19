@@ -31,6 +31,9 @@ import { DownloadCatalogModal } from './components/DownloadCatalogModal';
 import { OrderTrackingModal } from './components/OrderTrackingModal';
 import { SupabaseDevModal } from './components/SupabaseDevModal';
 import { AdminHubView } from './components/AdminHubView';
+import { DelhiveryAreaModal } from './components/DelhiveryPincodeChecker';
+import { OrderActionView } from './components/OrderActionView';
+import { activateRecoveryCoupon } from './services/aisensyService';
 
 // Legal & Policy Views
 import { PrivacyPolicyView } from './components/legal/PrivacyPolicyView';
@@ -78,8 +81,30 @@ export default function App() {
       if (hash === '#bulk') return 'bulk';
       if (hash === '#orders') return 'orders';
       if (hash === '#dashboard') return 'dashboard';
+      if (hash.startsWith('#checkout')) return 'checkout';
+      if (hash.startsWith('#order-action')) return 'order-action';
     }
     return 'home';
+  });
+
+  const [orderActionParams, setOrderActionParams] = useState<{
+    action: 'confirm' | 'cancel';
+    orderId: string;
+    orderNumber: string;
+    token?: string;
+  } | null>(() => {
+    if (typeof window !== 'undefined' && window.location.hash.startsWith('#order-action')) {
+      const qIdx = window.location.hash.indexOf('?');
+      const params = new URLSearchParams(qIdx !== -1 ? window.location.hash.slice(qIdx + 1) : '');
+      const rawAct = params.get('action');
+      return {
+        action: rawAct === 'cancel' ? 'cancel' : 'confirm',
+        orderId: params.get('orderId') || '',
+        orderNumber: params.get('orderNumber') || params.get('orderId') || '',
+        token: params.get('token') || undefined,
+      };
+    }
+    return null;
   });
   const [selectedProduct, setSelectedProduct] = useState<Product>(() => {
     if (typeof window !== 'undefined') {
@@ -138,6 +163,7 @@ export default function App() {
   const [isDownloadCatalogOpen, setIsDownloadCatalogOpen] = useState<boolean>(false);
   const [isTrackingModalOpen, setIsTrackingModalOpen] = useState<boolean>(false);
   const [isSupabaseDevOpen, setIsSupabaseDevOpen] = useState<boolean>(false);
+  const [isDeliveryCheckOpen, setIsDeliveryCheckOpen] = useState<boolean>(false);
 
 
   // Cart State (Persisted in localStorage)
@@ -274,6 +300,37 @@ export default function App() {
           setCurrentTab('product-detail');
           return;
         }
+      }
+
+      if (hash.startsWith('#order-action')) {
+        const qIdx = hash.indexOf('?');
+        const params = new URLSearchParams(qIdx !== -1 ? hash.slice(qIdx + 1) : '');
+        const rawAct = params.get('action');
+        setOrderActionParams({
+          action: rawAct === 'cancel' ? 'cancel' : 'confirm',
+          orderId: params.get('orderId') || '',
+          orderNumber: params.get('orderNumber') || params.get('orderId') || '',
+          token: params.get('token') || undefined,
+        });
+        setCurrentTab('order-action');
+        return;
+      }
+
+      if (hash.startsWith('#checkout')) {
+        const qIdx = hash.indexOf('?');
+        if (qIdx !== -1) {
+          const params = new URLSearchParams(hash.slice(qIdx + 1));
+          const coupon = params.get('coupon')?.trim().toUpperCase();
+          if (coupon === 'SAVE5NOW' || coupon === 'TEQQNO5') {
+            activateRecoveryCoupon({
+              triggerReason: 'whatsapp_recovery_link',
+              validMinutes: 15,
+              autoApply: true,
+            });
+          }
+        }
+        setCurrentTab('checkout');
+        return;
       }
 
       if (hash === '#catalog') {
@@ -621,6 +678,7 @@ export default function App() {
           onOpenBundleBuilder={() => setIsBundleBuilderOpen(true)}
           onOpenDownloadCatalog={() => setIsDownloadCatalogOpen(true)}
           onOpenTracking={() => setIsTrackingModalOpen(true)}
+          onOpenDeliveryCheck={() => setIsDeliveryCheckOpen(true)}
         />
       )}
 
@@ -776,6 +834,44 @@ export default function App() {
           />
         )}
 
+        {/* VIEW G2: WHATSAPP ORDER CONFIRM / CANCEL ACTION PAGE */}
+        {currentTab === 'order-action' && orderActionParams && (
+          <OrderActionView
+            action={orderActionParams.action}
+            orderId={orderActionParams.orderId}
+            orderNumber={orderActionParams.orderNumber}
+            token={orderActionParams.token}
+            onOrderActionComplete={(ordId, ordNum, status) => {
+              setOrders((prev) =>
+                prev.map((o) =>
+                  o.id === ordId || o.orderNumber === ordNum
+                    ? {
+                        ...o,
+                        whatsappActionStatus: status,
+                        orderStatus: status === 'confirmed' ? 'Confirmed' : o.orderStatus,
+                      }
+                    : o
+                )
+              );
+              setActiveOrder((prev) =>
+                prev && (prev.id === ordId || prev.orderNumber === ordNum)
+                  ? {
+                      ...prev,
+                      whatsappActionStatus: status,
+                      orderStatus: status === 'confirmed' ? 'Confirmed' : prev.orderStatus,
+                    }
+                  : prev
+              );
+            }}
+            onViewOrder={(ordNum) => {
+              const found = orders.find((o) => o.orderNumber === ordNum || o.id === ordNum);
+              if (found) setActiveOrder(found);
+              handleNavigate('orders');
+            }}
+            onBackHome={() => handleNavigate('home')}
+          />
+        )}
+
         {/* VIEW H: CORPORATE ACCOUNT DASHBOARD */}
         {currentTab === 'dashboard' && (
           user ? (
@@ -887,6 +983,7 @@ export default function App() {
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveCartItem}
         onProceedToCheckout={handleProceedToCheckout}
+        onOpenDeliveryCheck={() => setIsDeliveryCheckOpen(true)}
       />
 
       {/* 5.1 Wishlist Slide-Over Drawer */}
@@ -975,6 +1072,12 @@ export default function App() {
       <SupabaseDevModal
         isOpen={isSupabaseDevOpen}
         onClose={() => setIsSupabaseDevOpen(false)}
+      />
+
+      {/* 14. Delhivery Serviceability Checker Modal */}
+      <DelhiveryAreaModal
+        isOpen={isDeliveryCheckOpen}
+        onClose={() => setIsDeliveryCheckOpen(false)}
       />
 
 
