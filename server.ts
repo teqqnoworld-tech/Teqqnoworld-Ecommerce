@@ -720,8 +720,9 @@ app.post('/api/send-order-email', async (req: Request, res: Response) => {
       transporter.sendMail({
         from: `"TeqqnoWorld Orders" <${senderEmail}>`,
         to: recipientEmail,
-        replyTo: cfg.primaryAdminEmail,
+        replyTo: senderEmail,
         subject: customerSubject,
+        text: `Thank you for your order with TeqqnoWorld.\nOrder ID: ${payload.orderNumber || payload.orderId}\nCustomer: ${payload.customerName}\nTotal: INR ${Number(payload.total || 0).toLocaleString('en-IN')}\nYou can track your order anytime at https://teqqnoworld.com/#dashboard`,
         html: customerHtml,
         attachments: media.customerInlineAttachments,
       }),
@@ -854,13 +855,14 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
 
     const cfg = getSmtpConfig();
     const transporter = getSmtpTransporter();
-    const siteOrigin = (
-      cfg.smtpUser && process.env.APP_BASE_URL
-        ? process.env.APP_BASE_URL.trim().replace(/\/$/, '')
-        : originUrl && (String(originUrl).startsWith('http://') || String(originUrl).startsWith('https://'))
-        ? String(originUrl).replace(/\/$/, '')
-        : 'https://teqqnoworld.com'
-    );
+    const configuredBase = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+    const isCustomDomain = (u: string) =>
+      /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1|\.run\.app|\.ai\.studio/i.test(u);
+    const siteOrigin = isCustomDomain(configuredBase)
+      ? configuredBase
+      : isCustomDomain(String(originUrl || ''))
+      ? String(originUrl).trim().replace(/\/$/, '')
+      : 'https://teqqnoworld.com';
 
     const formattedTimeIst = new Date(registeredAt || Date.now()).toLocaleString('en-IN', {
       timeZone: 'Asia/Kolkata',
@@ -897,79 +899,77 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
     const customerHtml = `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
-<body style="margin:0;padding:0;background-color:#0F1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#FFFFFF;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#0F1117;padding:28px 14px;">
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0F172A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:28px 14px;">
     <tr>
       <td align="center">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background-color:#161922;border-radius:16px;overflow:hidden;border:1px solid #262A36;">
+        <table role="presentation" width="580" cellspacing="0" cellpadding="0" style="max-width:580px;width:100%;background-color:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E2E8F0;">
           <tr>
-            <td style="background:linear-gradient(135deg,#071B35 0%,#0E294D 100%);padding:28px 32px;border-bottom:3px solid #FF7900;">
-              <div style="font-size:24px;font-weight:800;letter-spacing:-0.4px;color:#FFFFFF;">
+            <td style="background-color:#071B35;padding:22px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:21px;font-weight:800;letter-spacing:-0.3px;color:#FFFFFF;">
                 Teqqno<span style="color:#FF7900;">World</span>
               </div>
-              <div style="font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:#94A3B8;margin-top:4px;">
-                Custom Corporate Printing &amp; Branded Merchandise
+              <div style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#CBD5E1;margin-top:3px;">
+                Account Confirmation
               </div>
             </td>
           </tr>
           <tr>
-            <td style="padding:32px;">
-              <div style="display:inline-block;background:#10B9811A;border:1px solid #10B98155;color:#34D399;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;margin-bottom:16px;">
-                ✓ ACCOUNT SUCCESSFULLY CREATED
-              </div>
-              <h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.3;color:#FFFFFF;">
-                Welcome to TeqqnoWorld, ${escapeHtml(cleanName)}!
+            <td style="padding:28px;">
+              <p style="margin:0 0 8px 0;font-size:13px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px;">
+                Email Verified &bull; Account Active
+              </p>
+              <h1 style="margin:0 0 12px 0;font-size:21px;line-height:1.35;color:#0F172A;">
+                Congratulations ${escapeHtml(cleanName)}, your account is ready.
               </h1>
-              <p style="margin:0 0 22px 0;font-size:14px;line-height:1.65;color:#CBD5E1;">
-                Aapka TeqqnoWorld account successfully create ho gaya hai. Ab aap custom corporate polo t-shirts, mugs, visiting cards, standees aur welcome kits par apna logo preview karke seedha order kar sakte hain.
+              <p style="margin:0 0 18px 0;font-size:14px;line-height:1.65;color:#334155;">
+                Your TeqqnoWorld account has been successfully created and your email address is verified. Aapka account ab active hai aur aap apne dashboard me login karke orders aur invoices manage kar sakte hain.
               </p>
 
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0F131C;border:1px solid #262C3D;border-radius:12px;margin-bottom:24px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:22px;">
                 <tr>
-                  <td style="padding:18px 20px;">
-                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#FF7900;margin-bottom:12px;">
-                      Your Account Details
+                  <td style="padding:16px 18px;">
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#64748B;margin-bottom:10px;">
+                      Account Details
                     </div>
-                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:13px;color:#E2E8F0;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:13px;color:#1E293B;">
                       <tr>
-                        <td style="padding:6px 0;color:#94A3B8;width:38%;">Full Name</td>
-                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanName)}</td>
+                        <td style="padding:5px 0;color:#64748B;width:36%;">Full Name</td>
+                        <td style="padding:5px 0;font-weight:600;color:#0F172A;">${escapeHtml(cleanName)}</td>
                       </tr>
                       <tr>
-                        <td style="padding:6px 0;color:#94A3B8;">Registered Email</td>
-                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanEmail)}</td>
+                        <td style="padding:5px 0;color:#64748B;">Email</td>
+                        <td style="padding:5px 0;font-weight:600;color:#0F172A;">${escapeHtml(cleanEmail)}</td>
                       </tr>
                       <tr>
-                        <td style="padding:6px 0;color:#94A3B8;">Mobile Number</td>
-                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanPhone || '—')}</td>
+                        <td style="padding:5px 0;color:#64748B;">Mobile</td>
+                        <td style="padding:5px 0;font-weight:600;color:#0F172A;">${escapeHtml(cleanPhone || '—')}</td>
                       </tr>
                       ${cleanCompany ? `<tr>
-                        <td style="padding:6px 0;color:#94A3B8;">Company</td>
-                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanCompany)}</td>
+                        <td style="padding:5px 0;color:#64748B;">Company</td>
+                        <td style="padding:5px 0;font-weight:600;color:#0F172A;">${escapeHtml(cleanCompany)}</td>
                       </tr>` : ''}
                       <tr>
-                        <td style="padding:6px 0;color:#94A3B8;">Registered On</td>
-                        <td style="padding:6px 0;color:#CBD5E1;">${escapeHtml(formattedTimeIst)} IST</td>
+                        <td style="padding:5px 0;color:#64748B;">Created On</td>
+                        <td style="padding:5px 0;color:#334155;">${escapeHtml(formattedTimeIst)} IST</td>
                       </tr>
                     </table>
                   </td>
                 </tr>
               </table>
 
-              <div style="text-align:center;margin:26px 0 18px;">
-                <a href="${escapeHtml(siteOrigin)}/#dashboard" style="display:inline-block;background:#FF7900;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;padding:13px 28px;border-radius:10px;">
-                  Open My TeqqnoWorld Dashboard →
-                </a>
-              </div>
+              <p style="margin:0 0 18px 0;font-size:14px;line-height:1.6;color:#334155;">
+                Access your dashboard anytime at <a href="${escapeHtml(siteOrigin)}/#dashboard" style="color:#EA580C;font-weight:600;text-decoration:underline;">${escapeHtml(siteOrigin.replace(/^https?:\/\//, ''))}</a>.
+              </p>
 
-              <p style="margin:18px 0 0 0;font-size:12px;line-height:1.6;color:#94A3B8;text-align:center;">
-                Need help with custom printing, bulk quotes, or samples? Reply to this email or WhatsApp our print team anytime.
+              <p style="margin:0;font-size:13px;line-height:1.6;color:#64748B;">
+                If you have any questions, simply reply to this email and our team will assist you.
               </p>
             </td>
           </tr>
           <tr>
-            <td style="background:#0D1018;padding:18px 32px;border-top:1px solid #232837;text-align:center;font-size:11px;color:#64748B;">
-              © ${new Date().getFullYear()} TeqqnoWorld • Printing · Branding · Solutions • Hyderabad, India
+            <td style="background-color:#F8FAFC;padding:16px 28px;border-top:1px solid #E2E8F0;font-size:11px;color:#64748B;">
+              &copy; ${new Date().getFullYear()} TeqqnoWorld &bull; Hyderabad, India &bull; This is an automated account confirmation for ${escapeHtml(cleanEmail)}.
             </td>
           </tr>
         </table>
@@ -978,6 +978,27 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
   </table>
 </body>
 </html>`;
+
+    const customerText = [
+      `Hi ${cleanName},`,
+      ``,
+      `Congratulations! Your TeqqnoWorld account has been successfully created and verified.`,
+      `Aapka TeqqnoWorld account successfully create ho gaya hai.`,
+      ``,
+      `Account Details:`,
+      `- Name: ${cleanName}`,
+      `- Email: ${cleanEmail}`,
+      `- Mobile: ${cleanPhone || 'N/A'}`,
+      cleanCompany ? `- Company: ${cleanCompany}` : '',
+      `- Created On: ${formattedTimeIst} IST`,
+      ``,
+      `Dashboard: ${siteOrigin}/#dashboard`,
+      ``,
+      `Regards,`,
+      `TeqqnoWorld Team`,
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const adminHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -1000,7 +1021,7 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
           <tr>
             <td style="padding:26px 28px;">
               <p style="margin:0 0 18px 0;font-size:13px;color:#CBD5E1;line-height:1.6;">
-                A new customer has registered an account on the TeqqnoWorld storefront. Complete customer details are below:
+                A new customer has verified their Gmail OTP and registered an account on TeqqnoWorld. Complete customer details are below:
               </p>
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0F131C;border:1px solid #262C3D;border-radius:12px;margin-bottom:20px;">
                 <tr>
@@ -1053,31 +1074,101 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
 </body>
 </html>`;
 
-    const [customerResult, adminResult] = await Promise.allSettled([
-      transporter.sendMail({
-        from: `"TeqqnoWorld" <${cfg.smtpUser}>`,
-        to: cleanEmail,
-        replyTo: cfg.primaryAdminEmail,
-        subject: `Welcome to TeqqnoWorld, ${cleanName}! Account Created Successfully`,
-        html: customerHtml,
-      }),
-      transporter.sendMail({
-        from: `"TeqqnoWorld Registrations" <${cfg.smtpUser}>`,
-        to: cfg.adminEmailList.join(', '),
-        replyTo: cleanEmail,
-        subject: `[New Customer Signup] ${cleanName}${cleanCompany ? ` (${cleanCompany})` : ''} — ${cleanPhone || cleanEmail}`,
-        html: adminHtml,
-      }),
-    ]);
+    const adminText = [
+      `New Customer Registration on TeqqnoWorld`,
+      `Name: ${cleanName}`,
+      `Email: ${cleanEmail}`,
+      `Mobile: ${cleanPhone || 'Not provided'}`,
+      `Company: ${cleanCompany || 'Individual Customer'}`,
+      `Account Type: ${cleanAccountType}`,
+      `User ID: ${cleanUserId}`,
+      `Registered At: ${formattedTimeIst} IST`,
+    ].join('\n');
 
-    const customerSent = customerResult.status === 'fulfilled';
-    const adminSent = adminResult.status === 'fulfilled';
+    // Helper: send sequentially with 1 automatic retry so Hostinger SMTP never drops concurrent TLS logins
+    const sendWithRetry = async (mailOptions: Parameters<typeof transporter.sendMail>[0], label: string) => {
+      try {
+        return await transporter.sendMail(mailOptions);
+      } catch (firstErr: any) {
+        console.warn(`[Registration Email - ${label} Attempt 1 Failed, retrying...]:`, firstErr?.message || firstErr);
+        await new Promise((r) => setTimeout(r, 700));
+        const freshTransporter = getSmtpTransporter() || transporter;
+        return await freshTransporter.sendMail(mailOptions);
+      }
+    };
 
-    if (!customerSent) {
-      console.error('[Registration Email - Customer Failed]:', (customerResult as PromiseRejectedResult).reason);
+    // 1. Send Customer Congratulations Email FIRST (strictly aligned From + Reply-To for Gmail Primary Inbox)
+    let customerSent = false;
+    let customerMessageId: string | undefined;
+    let customerError: string | undefined;
+    try {
+      const custInfo = await sendWithRetry(
+        {
+          from: `"TeqqnoWorld" <${cfg.smtpUser}>`,
+          to: cleanEmail,
+          replyTo: cfg.smtpUser,
+          subject: `Your TeqqnoWorld account is confirmed, ${cleanName}`,
+          text: customerText,
+          html: customerHtml,
+        },
+        'Customer'
+      );
+      customerSent = true;
+      customerMessageId = custInfo?.messageId;
+    } catch (err: any) {
+      customerError = err?.message || String(err);
+      console.error('[Registration Email - Customer Failed]:', err);
     }
-    if (!adminSent) {
-      console.error('[Registration Email - Admin Failed]:', (adminResult as PromiseRejectedResult).reason);
+
+    // Small pause before 2nd SMTP send to respect Hostinger per-second connection limit
+    await new Promise((r) => setTimeout(r, 350));
+
+    // 2. Send Admin Registration Alert Email SECOND
+    let adminSent = false;
+    let adminMessageId: string | undefined;
+    let adminError: string | undefined;
+    try {
+      const adminInfo = await sendWithRetry(
+        {
+          from: `"TeqqnoWorld Registrations" <${cfg.smtpUser}>`,
+          to: cfg.adminEmailList.join(', '),
+          replyTo: cleanEmail,
+          subject: `[New Customer Signup] ${cleanName}${cleanCompany ? ` (${cleanCompany})` : ''} — ${cleanPhone || cleanEmail}`,
+          text: adminText,
+          html: adminHtml,
+        },
+        'Admin'
+      );
+      adminSent = true;
+      adminMessageId = adminInfo?.messageId;
+    } catch (err: any) {
+      adminError = err?.message || String(err);
+      console.error('[Registration Email - Admin Failed]:', err);
+    }
+
+    // Persist lightweight audit record for debugging delivery status
+    try {
+      const logPath = path.join(os.tmpdir(), 'teqqno-reg-email-log.json');
+      const existingLogs = fs.existsSync(logPath)
+        ? JSON.parse(fs.readFileSync(logPath, 'utf8') || '[]')
+        : [];
+      const nextLogs = [
+        {
+          at: new Date().toISOString(),
+          email: cleanEmail,
+          name: cleanName,
+          customerSent,
+          customerMessageId,
+          customerError,
+          adminSent,
+          adminMessageId,
+          adminError,
+        },
+        ...(Array.isArray(existingLogs) ? existingLogs : []),
+      ].slice(0, 20);
+      fs.writeFileSync(logPath, JSON.stringify(nextLogs, null, 2), 'utf8');
+    } catch {
+      // non-fatal log write
     }
 
     return res.status(customerSent || adminSent ? 200 : 500).json({
@@ -1086,8 +1177,8 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
       adminSent,
       recipient: cleanEmail,
       adminRecipients: cfg.adminEmailList,
-      messageId: customerSent ? customerResult.value.messageId : undefined,
-      adminMessageId: adminSent ? adminResult.value.messageId : undefined,
+      messageId: customerMessageId,
+      adminMessageId,
       message: `Registration emails dispatched (Customer: ${customerSent ? 'Sent' : 'Failed'}, Admin: ${adminSent ? 'Sent' : 'Failed'}).`,
     });
   } catch (err: any) {
@@ -1099,9 +1190,693 @@ app.post('/api/send-registration-email', async (req: Request, res: Response) => 
   }
 });
 
+// ==============================================================================
+// 3A-2. EMAIL 6-DIGIT OTP VERIFICATION (HOSTINGER SMTP — ZERO EXTRA COST)
+// ==============================================================================
+
+interface EmailOtpRecord {
+  email: string;
+  purpose: 'register' | 'login' | 'reset';
+  hash: string;
+  expiresAt: number;
+  sentAt: number;
+  attempts: number;
+}
+
+const EMAIL_OTP_LEDGER_PATH = path.join(os.tmpdir(), 'teqqno-email-otp.json');
+
+function loadEmailOtpStore(): Record<string, EmailOtpRecord> {
+  try {
+    if (fs.existsSync(EMAIL_OTP_LEDGER_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(EMAIL_OTP_LEDGER_PATH, 'utf8'));
+      const now = Date.now();
+      const cleaned: Record<string, EmailOtpRecord> = {};
+      for (const [k, rec] of Object.entries(parsed || {})) {
+        const r = rec as EmailOtpRecord;
+        if (r && r.expiresAt > now) cleaned[k] = r;
+      }
+      return cleaned;
+    }
+  } catch {
+    // ignore corrupt otp file
+  }
+  return {};
+}
+
+function saveEmailOtpStore(store: Record<string, EmailOtpRecord>) {
+  try {
+    fs.writeFileSync(EMAIL_OTP_LEDGER_PATH, JSON.stringify(store), 'utf8');
+  } catch (err) {
+    console.warn('[Email OTP Store Write Warning]:', err);
+  }
+}
+
+function hashEmailOtp(email: string, otp: string, purpose: string): string {
+  const secret = (process.env.HOSTINGER_SMTP_PASSWORD || process.env.AISENSY_WEBHOOK_SECRET || 'teqqno_otp_salt_2026').trim();
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${email.toLowerCase()}:${purpose}:${otp}`)
+    .digest('hex');
+}
+
+app.post('/api/auth/send-email-otp', async (req: Request, res: Response) => {
+  try {
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+    const cleanName = String(req.body?.fullName || 'Valued Customer').trim();
+    const purpose: 'register' | 'login' = req.body?.purpose === 'login' ? 'login' : 'register';
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address.',
+      });
+    }
+
+    const store = loadEmailOtpStore();
+    const key = `${purpose}:${cleanEmail}`;
+    const existing = store[key];
+    const now = Date.now();
+
+    if (existing && now - existing.sentAt < 25_000) {
+      const waitSec = Math.ceil((25_000 - (now - existing.sentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec: waitSec,
+        message: `Please wait ${waitSec}s before requesting a new verification code.`,
+      });
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    const expiresAt = now + 10 * 60 * 1000; // 10 minutes
+    store[key] = {
+      email: cleanEmail,
+      purpose,
+      hash: hashEmailOtp(cleanEmail, otp, purpose),
+      expiresAt,
+      sentAt: now,
+      attempts: 0,
+    };
+    saveEmailOtpStore(store);
+
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+
+    if (!transporter) {
+      return res.status(200).json({
+        success: true,
+        simulated: true,
+        devOtp: otp,
+        expiresInMinutes: 10,
+        message: 'SMTP not configured — running in Simulation Mode.',
+      });
+    }
+
+    const spacedOtp = `${otp.slice(0, 3)} ${otp.slice(3)}`;
+    const otpHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#0F1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#FFFFFF;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#0F1117;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="540" cellspacing="0" cellpadding="0" style="max-width:540px;width:100%;background-color:#161922;border-radius:16px;overflow:hidden;border:1px solid #262A36;">
+          <tr>
+            <td style="background:linear-gradient(135deg,#071B35 0%,#0E294D 100%);padding:24px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:22px;font-weight:800;letter-spacing:-0.4px;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#94A3B8;margin-top:4px;">
+                Email Verification Code
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px 28px;text-align:center;">
+              <h1 style="margin:0 0 10px 0;font-size:20px;color:#FFFFFF;">
+                Hi ${escapeHtml(cleanName)}, verify your email
+              </h1>
+              <p style="margin:0 0 22px 0;font-size:14px;line-height:1.6;color:#CBD5E1;">
+                Enter this 6-digit verification code on TeqqnoWorld to verify <strong style="color:#FFFFFF;">${escapeHtml(cleanEmail)}</strong> and complete your account setup:
+              </p>
+
+              <div style="display:inline-block;background:#0B1220;border:2px solid #FF7900;border-radius:14px;padding:18px 34px;margin:6px 0 20px;">
+                <div style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:800;letter-spacing:8px;color:#FF9E44;">
+                  ${escapeHtml(spacedOtp)}
+                </div>
+              </div>
+
+              <p style="margin:0 0 10px 0;font-size:12px;color:#94A3B8;">
+                This code is valid for <strong style="color:#E2E8F0;">10 minutes</strong>. Do not share this code with anyone.
+              </p>
+              <p style="margin:0;font-size:11px;color:#64748B;">
+                If you didn&apos;t request this code on TeqqnoWorld, you can safely ignore this email.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#0D1018;padding:16px 28px;border-top:1px solid #232837;text-align:center;font-size:11px;color:#64748B;">
+              © ${new Date().getFullYear()} TeqqnoWorld • Printing · Branding · Solutions
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await transporter.sendMail({
+      from: `"TeqqnoWorld Verification" <${cfg.smtpUser}>`,
+      to: cleanEmail,
+      subject: `${otp} is your TeqqnoWorld verification code`,
+      html: otpHtml,
+    });
+
+    return res.status(200).json({
+      success: true,
+      simulated: false,
+      expiresInMinutes: 10,
+      message: `6-digit verification code sent to ${cleanEmail}. Check your Gmail inbox (or Spam folder).`,
+    });
+  } catch (err: any) {
+    console.error('[Send Email OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to send verification code email. Please try again.',
+    });
+  }
+});
+
+app.post('/api/auth/verify-email-otp', (req: Request, res: Response) => {
+  try {
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+    const cleanOtp = String(req.body?.otp || '').replace(/[^0-9]/g, '');
+    const purpose: 'register' | 'login' = req.body?.purpose === 'login' ? 'login' : 'register';
+
+    if (!cleanEmail || cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Please enter the exact 6-digit verification code sent to your email.',
+      });
+    }
+
+    const store = loadEmailOtpStore();
+    const key = `${purpose}:${cleanEmail}`;
+    const record = store[key];
+
+    if (!record || Date.now() > record.expiresAt) {
+      delete store[key];
+      saveEmailOtpStore(store);
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Verification code has expired. Please click "Resend Code" to get a new one.',
+      });
+    }
+
+    if (record.attempts >= 5) {
+      delete store[key];
+      saveEmailOtpStore(store);
+      return res.status(429).json({
+        success: false,
+        verified: false,
+        message: 'Too many wrong attempts. Please request a fresh verification code.',
+      });
+    }
+
+    const expectedHash = hashEmailOtp(cleanEmail, cleanOtp, purpose);
+    const bufA = Buffer.from(record.hash, 'utf8');
+    const bufB = Buffer.from(expectedHash, 'utf8');
+    const isMatch = bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+
+    if (!isMatch) {
+      record.attempts += 1;
+      store[key] = record;
+      saveEmailOtpStore(store);
+      const left = Math.max(0, 5 - record.attempts);
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        message: left > 0
+          ? `Incorrect verification code. ${left} attempt${left === 1 ? '' : 's'} remaining.`
+          : 'Too many wrong attempts. Please request a fresh verification code.',
+      });
+    }
+
+    delete store[key];
+    saveEmailOtpStore(store);
+
+    return res.status(200).json({
+      success: true,
+      verified: true,
+      message: 'Email verified successfully!',
+    });
+  } catch (err: any) {
+    console.error('[Verify Email OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      verified: false,
+      message: err?.message || 'Verification failed. Please try again.',
+    });
+  }
+});
+
+// ==============================================================================
+// 3A-3. FORGOT PASSWORD WITH 6-DIGIT GMAIL OTP (HOSTINGER SMTP + SUPABASE ADMIN)
+// ==============================================================================
+
+const DEFAULT_SUPABASE_URL = 'https://jqajzfftaxwafctquzjr.supabase.co';
+
+function getSupabaseAdminConfig() {
+  const rawUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL).trim().replace(/\/$/, '');
+  const url = rawUrl && !rawUrl.includes('your-project') ? rawUrl : DEFAULT_SUPABASE_URL;
+  const serviceRoleKey = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    ''
+  ).trim();
+  return { url, serviceRoleKey };
+}
+
+function buildSupabaseAdminHeaders(
+  serviceRoleKey: string,
+  includeJsonContentType = false
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    apikey: serviceRoleKey,
+  };
+  // New Supabase secret keys (sb_secret_...) are opaque strings and must be sent via `apikey` only,
+  // whereas legacy service_role JWTs (eyJ...) require both `apikey` and `Authorization: Bearer`.
+  if (!serviceRoleKey.startsWith('sb_secret_')) {
+    headers.Authorization = `Bearer ${serviceRoleKey}`;
+  }
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return headers;
+}
+
+async function findSupabaseAuthUserByEmail(
+  email: string
+): Promise<{ id: string; email: string; fullName?: string } | null> {
+  const { url, serviceRoleKey } = getSupabaseAdminConfig();
+  if (!serviceRoleKey) return null;
+
+  const target = email.trim().toLowerCase();
+  for (let page = 1; page <= 5; page += 1) {
+    const resp = await fetch(`${url}/auth/v1/admin/users?page=${page}&per_page=200`, {
+      method: 'GET',
+      headers: buildSupabaseAdminHeaders(serviceRoleKey, false),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`Supabase user lookup failed (HTTP ${resp.status}): ${errText.slice(0, 160)}`);
+    }
+    const payload = (await resp.json()) as { users?: Array<any> };
+    const users = Array.isArray(payload?.users) ? payload.users : [];
+    const match = users.find((u) => String(u?.email || '').trim().toLowerCase() === target);
+    if (match?.id) {
+      const meta = match.user_metadata || {};
+      const fullName =
+        meta.full_name ||
+        `${meta.first_name || ''} ${meta.last_name || ''}`.trim() ||
+        undefined;
+      return { id: String(match.id), email: String(match.email || target), fullName };
+    }
+    if (users.length < 200) break;
+  }
+  return null;
+}
+
+app.post('/api/auth/forgot-password/send-otp', async (req: Request, res: Response) => {
+  try {
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid registered email address.',
+      });
+    }
+
+    const { serviceRoleKey } = getSupabaseAdminConfig();
+    if (!serviceRoleKey) {
+      return res.status(200).json({
+        success: false,
+        needsServiceRoleKey: true,
+        message:
+          'Password reset OTP needs SUPABASE_SERVICE_ROLE_KEY added in server secrets once. Please add it or use the reset link option.',
+      });
+    }
+
+    const existingUser = await findSupabaseAuthUserByEmail(cleanEmail);
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'No TeqqnoWorld account found with this email address. Please check your email or register first.',
+      });
+    }
+
+    const store = loadEmailOtpStore();
+    const key = `reset:${cleanEmail}`;
+    const existingOtp = store[key];
+    const now = Date.now();
+
+    if (existingOtp && now - existingOtp.sentAt < 25_000) {
+      const waitSec = Math.ceil((25_000 - (now - existingOtp.sentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec: waitSec,
+        message: `Please wait ${waitSec}s before requesting a new reset code.`,
+      });
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    const expiresAt = now + 10 * 60 * 1000; // 10 minutes
+    store[key] = {
+      email: cleanEmail,
+      purpose: 'reset',
+      hash: hashEmailOtp(cleanEmail, otp, 'reset'),
+      expiresAt,
+      sentAt: now,
+      attempts: 0,
+    };
+    saveEmailOtpStore(store);
+
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+    const displayName = existingUser.fullName || 'Customer';
+
+    if (!transporter) {
+      return res.status(200).json({
+        success: true,
+        simulated: true,
+        devOtp: otp,
+        expiresInMinutes: 10,
+        message: 'SMTP not configured — running in Simulation Mode.',
+      });
+    }
+
+    const spacedOtp = `${otp.slice(0, 3)} ${otp.slice(3)}`;
+    const resetOtpHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0F172A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="540" cellspacing="0" cellpadding="0" style="max-width:540px;width:100%;background-color:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E2E8F0;">
+          <tr>
+            <td style="background-color:#071B35;padding:20px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:21px;font-weight:800;letter-spacing:-0.3px;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#CBD5E1;margin-top:3px;">
+                Password Reset Verification
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;text-align:center;">
+              <h1 style="margin:0 0 10px 0;font-size:20px;color:#0F172A;">
+                Hi ${escapeHtml(displayName)}, reset your password
+              </h1>
+              <p style="margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#334155;">
+                Enter this 6-digit verification code on TeqqnoWorld to reset the password for <strong style="color:#0F172A;">${escapeHtml(cleanEmail)}</strong>:
+              </p>
+
+              <div style="display:inline-block;background-color:#FFF7ED;border:2px solid #FF7900;border-radius:12px;padding:16px 32px;margin:4px 0 20px;">
+                <div style="font-family:'Courier New',Courier,monospace;font-size:32px;font-weight:800;letter-spacing:8px;color:#C2410C;">
+                  ${escapeHtml(spacedOtp)}
+                </div>
+              </div>
+
+              <p style="margin:0 0 8px 0;font-size:12px;color:#475569;">
+                This code is valid for <strong>10 minutes</strong>. Do not share this code with anyone.
+              </p>
+              <p style="margin:0;font-size:11px;color:#64748B;">
+                If you did not request a password reset, you can safely ignore this email and your password will remain unchanged.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#F8FAFC;padding:14px 28px;border-top:1px solid #E2E8F0;text-align:center;font-size:11px;color:#64748B;">
+              &copy; ${new Date().getFullYear()} TeqqnoWorld &bull; Hyderabad, India
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const resetOtpText = [
+      `Hi ${displayName},`,
+      ``,
+      `Your TeqqnoWorld password reset verification code is: ${otp}`,
+      ``,
+      `Enter this 6-digit code on TeqqnoWorld to set a new password for ${cleanEmail}.`,
+      `This code is valid for 10 minutes. Do not share it with anyone.`,
+      ``,
+      `If you did not request this, you can safely ignore this email.`,
+      ``,
+      `TeqqnoWorld Team`,
+    ].join('\n');
+
+    await transporter.sendMail({
+      from: `"TeqqnoWorld Security" <${cfg.smtpUser}>`,
+      to: cleanEmail,
+      replyTo: cfg.smtpUser,
+      subject: `${otp} is your TeqqnoWorld password reset code`,
+      text: resetOtpText,
+      html: resetOtpHtml,
+    });
+
+    return res.status(200).json({
+      success: true,
+      simulated: false,
+      expiresInMinutes: 10,
+      message: `6-digit password reset code sent to ${cleanEmail}. Please check your Gmail inbox.`,
+    });
+  } catch (err: any) {
+    console.error('[Forgot Password Send OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to send password reset verification code.',
+    });
+  }
+});
+
+app.post('/api/auth/forgot-password/reset', async (req: Request, res: Response) => {
+  try {
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+    const cleanOtp = String(req.body?.otp || '').replace(/[^0-9]/g, '');
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Please enter a valid email address.',
+      });
+    }
+
+    if (cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Please enter the exact 6-digit verification code sent to your Gmail.',
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'New password must be at least 6 characters long.',
+      });
+    }
+
+    const { url, serviceRoleKey } = getSupabaseAdminConfig();
+    if (!serviceRoleKey) {
+      return res.status(503).json({
+        success: false,
+        passwordUpdated: false,
+        needsServiceRoleKey: true,
+        message: 'Server requires SUPABASE_SERVICE_ROLE_KEY in environment secrets to complete password reset.',
+      });
+    }
+
+    // 1. Strictly verify the 6-digit OTP first
+    const store = loadEmailOtpStore();
+    const key = `reset:${cleanEmail}`;
+    const record = store[key];
+
+    if (!record || Date.now() > record.expiresAt) {
+      delete store[key];
+      saveEmailOtpStore(store);
+      return res.status(400).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Verification code has expired. Please click "Resend Code" to get a new one.',
+      });
+    }
+
+    if (record.attempts >= 5) {
+      delete store[key];
+      saveEmailOtpStore(store);
+      return res.status(429).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Too many wrong attempts. Please request a fresh verification code.',
+      });
+    }
+
+    const expectedHash = hashEmailOtp(cleanEmail, cleanOtp, 'reset');
+    const bufA = Buffer.from(record.hash, 'utf8');
+    const bufB = Buffer.from(expectedHash, 'utf8');
+    const isMatch = bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+
+    if (!isMatch) {
+      record.attempts += 1;
+      store[key] = record;
+      saveEmailOtpStore(store);
+      const left = Math.max(0, 5 - record.attempts);
+      return res.status(400).json({
+        success: false,
+        passwordUpdated: false,
+        message:
+          left > 0
+            ? `Incorrect verification code. ${left} attempt${left === 1 ? '' : 's'} remaining.`
+            : 'Too many wrong attempts. Please request a fresh verification code.',
+      });
+    }
+
+    // 2. Find user in Supabase Auth and update their password via Admin API
+    const existingUser = await findSupabaseAuthUserByEmail(cleanEmail);
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Account not found for this email address.',
+      });
+    }
+
+    const updateResp = await fetch(`${url}/auth/v1/admin/users/${existingUser.id}`, {
+      method: 'PUT',
+      headers: buildSupabaseAdminHeaders(serviceRoleKey, true),
+      body: JSON.stringify({
+        password: newPassword,
+        email_confirm: true,
+      }),
+    });
+
+    if (!updateResp.ok) {
+      const errText = await updateResp.text().catch(() => '');
+      console.error('[Forgot Password Supabase Update Error]:', updateResp.status, errText);
+      return res.status(500).json({
+        success: false,
+        passwordUpdated: false,
+        message: 'Could not update password on authentication server. Please try again.',
+      });
+    }
+
+    // 3. Consume OTP only after password update succeeded
+    delete store[key];
+    saveEmailOtpStore(store);
+
+    // 4. Send clean transactional Password Updated Confirmation Email (non-blocking if SMTP hiccups)
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+    if (transporter) {
+      const displayName = existingUser.fullName || 'Customer';
+      const timeIst = new Date().toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const confirmHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0F172A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="540" cellspacing="0" cellpadding="0" style="max-width:540px;width:100%;background-color:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E2E8F0;">
+          <tr>
+            <td style="background-color:#071B35;padding:20px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:21px;font-weight:800;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#CBD5E1;margin-top:3px;">
+                Password Security Notice
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;">
+              <p style="margin:0 0 8px 0;font-size:12px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px;">
+                Password Updated
+              </p>
+              <h1 style="margin:0 0 12px 0;font-size:20px;color:#0F172A;">
+                Hi ${escapeHtml(displayName)}, your password was changed.
+              </h1>
+              <p style="margin:0 0 16px 0;font-size:14px;line-height:1.6;color:#334155;">
+                The password for your TeqqnoWorld account (<strong>${escapeHtml(cleanEmail)}</strong>) was successfully updated on ${escapeHtml(timeIst)} IST. You can now sign in with your new password at <a href="https://teqqnoworld.com" style="color:#EA580C;font-weight:600;">teqqnoworld.com</a>.
+              </p>
+              <p style="margin:0;font-size:12px;color:#64748B;">
+                If you did not make this change, reply to this email immediately so our team can secure your account.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#F8FAFC;padding:14px 28px;border-top:1px solid #E2E8F0;font-size:11px;color:#64748B;">
+              &copy; ${new Date().getFullYear()} TeqqnoWorld &bull; Hyderabad, India
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+      transporter
+        .sendMail({
+          from: `"TeqqnoWorld Security" <${cfg.smtpUser}>`,
+          to: cleanEmail,
+          replyTo: cfg.smtpUser,
+          subject: `Your TeqqnoWorld password was updated`,
+          text: `Hi ${displayName},\n\nYour TeqqnoWorld account password for ${cleanEmail} was successfully updated on ${timeIst} IST.\nYou can now sign in at https://teqqnoworld.com with your new password.\n\nTeqqnoWorld Team`,
+          html: confirmHtml,
+        })
+        .catch((mailErr) => console.warn('[Password Updated Confirmation Email Warning]:', mailErr));
+    }
+
+    return res.status(200).json({
+      success: true,
+      passwordUpdated: true,
+      message: 'Password reset successfully! You can now sign in with your new password.',
+    });
+  } catch (err: any) {
+    console.error('[Forgot Password Reset Error]:', err);
+    return res.status(500).json({
+      success: false,
+      passwordUpdated: false,
+      message: err?.message || 'Failed to reset password. Please try again.',
+    });
+  }
+});
+
 // Health check / SMTP status endpoint
 app.get('/api/smtp-status', (_req: Request, res: Response) => {
   const cfg = getSmtpConfig();
+  const supaAdmin = getSupabaseAdminConfig();
 
   res.json({
     configured: Boolean(cfg.smtpUser && cfg.smtpPass),
@@ -1110,6 +1885,7 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
     secure: cfg.smtpSecure,
     senderEmail: cfg.smtpUser || '(not set)',
     adminEmail: cfg.adminEmailList.join(', '),
+    passwordResetOtpReady: Boolean(supaAdmin.serviceRoleKey),
   });
 });
 

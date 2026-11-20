@@ -34,6 +34,7 @@ import { AdminHubView } from './components/AdminHubView';
 import { DelhiveryAreaModal } from './components/DelhiveryPincodeChecker';
 import { OrderActionView } from './components/OrderActionView';
 import { activateRecoveryCoupon } from './services/aisensyService';
+import { supabase } from './lib/supabase';
 
 // Legal & Policy Views
 import { PrivacyPolicyView } from './components/legal/PrivacyPolicyView';
@@ -237,6 +238,64 @@ export default function App() {
       console.error(e);
     }
   }, [wishlistIds]);
+
+  // Handle Supabase email confirmation / auth redirect hash (#access_token=...) cleanly
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash || '';
+    if (!hash.includes('access_token=') && !hash.includes('type=signup') && !hash.includes('type=recovery')) {
+      return;
+    }
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        const authUser = data?.session?.user;
+        if (!authUser) return;
+
+        const meta = authUser.user_metadata || {};
+        let cached: Partial<UserProfile> | null = null;
+        try {
+          const raw = localStorage.getItem(`teqqno_user_profile_${authUser.id}`);
+          if (raw) cached = JSON.parse(raw);
+        } catch {
+          cached = null;
+        }
+
+        const resolvedCompany = cached?.companyName ?? (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
+        const fullName =
+          cached?.name ||
+          meta.full_name ||
+          `${meta.first_name || ''} ${meta.last_name || ''}`.trim() ||
+          (authUser.email ? authUser.email.split('@')[0] : 'Customer');
+
+        const verifiedProfile: UserProfile = {
+          id: authUser.id,
+          name: fullName,
+          email: authUser.email || cached?.email || '',
+          mobile: cached?.mobile || meta.phone || '',
+          companyName: resolvedCompany || undefined,
+          gstin: cached?.gstin,
+          avatarUrl: cached?.avatarUrl,
+          accountType: cached?.accountType || (resolvedCompany ? 'business' : 'individual'),
+          role: resolvedCompany ? 'Corporate Admin' : 'Individual Shopper',
+          isVerified: true,
+          createdAt: cached?.createdAt || authUser.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          savedAddresses: Array.isArray(cached?.savedAddresses) ? cached.savedAddresses : [],
+        };
+
+        setUser(verifiedProfile);
+        try {
+          localStorage.setItem('teqqno_user', JSON.stringify(verifiedProfile));
+          localStorage.setItem(`teqqno_user_profile_${verifiedProfile.id}`, JSON.stringify(verifiedProfile));
+          window.history.replaceState(null, '', '#dashboard');
+        } catch {
+          // ignore
+        }
+        setCurrentTab('dashboard');
+      })
+      .catch(() => {});
+  }, []);
 
   // Scroll to top on tab change
   useEffect(() => {

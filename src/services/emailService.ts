@@ -182,14 +182,19 @@ export async function sendRegistrationEmails(
 ): Promise<EmailResponse> {
   try {
     const originUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     const response = await fetch('/api/send-registration-email', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       keepalive: true,
+      signal: controller.signal,
       body: JSON.stringify({ ...payload, originUrl }),
     });
+    clearTimeout(timeoutId);
 
     const data = await safeParseJson<EmailResponse>(response);
     if (!data) {
@@ -206,6 +211,158 @@ export async function sendRegistrationEmails(
       success: false,
       backendUnavailable: true,
       message: error?.message || 'Network error calling /api/send-registration-email.',
+    };
+  }
+}
+
+export interface EmailOtpSendResponse {
+  success: boolean;
+  simulated?: boolean;
+  devOtp?: string;
+  retryAfterSec?: number;
+  expiresInMinutes?: number;
+  message: string;
+}
+
+export interface EmailOtpVerifyResponse {
+  success: boolean;
+  verified: boolean;
+  message: string;
+}
+
+/**
+ * Sends a 6-digit verification code to the user's email via Hostinger SMTP.
+ */
+export async function sendEmailVerificationOtp(params: {
+  email: string;
+  fullName?: string;
+  purpose?: 'register' | 'login';
+}): Promise<EmailOtpSendResponse> {
+  try {
+    const response = await fetch('/api/auth/send-email-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await safeParseJson<EmailOtpSendResponse>(response);
+    if (!data) {
+      return {
+        success: false,
+        message: `Email OTP API unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return data;
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error?.message || 'Network error sending verification code.',
+    };
+  }
+}
+
+/**
+ * Verifies the 6-digit email OTP code on the server.
+ */
+export async function verifyEmailVerificationOtp(params: {
+  email: string;
+  otp: string;
+  purpose?: 'register' | 'login';
+}): Promise<EmailOtpVerifyResponse> {
+  try {
+    const response = await fetch('/api/auth/verify-email-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await safeParseJson<EmailOtpVerifyResponse>(response);
+    if (!data) {
+      return {
+        success: false,
+        verified: false,
+        message: `Email OTP verification API unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return data;
+  } catch (error: any) {
+    return {
+      success: false,
+      verified: false,
+      message: error?.message || 'Network error verifying code.',
+    };
+  }
+}
+
+export interface ForgotPasswordOtpResponse {
+  success: boolean;
+  simulated?: boolean;
+  devOtp?: string;
+  retryAfterSec?: number;
+  expiresInMinutes?: number;
+  needsServiceRoleKey?: boolean;
+  message: string;
+}
+
+export interface ForgotPasswordResetResponse {
+  success: boolean;
+  passwordUpdated: boolean;
+  needsServiceRoleKey?: boolean;
+  message: string;
+}
+
+/**
+ * Sends a 6-digit password reset verification code to the user's Gmail via Hostinger SMTP.
+ */
+export async function sendForgotPasswordOtp(email: string): Promise<ForgotPasswordOtpResponse> {
+  try {
+    const response = await fetch('/api/auth/forgot-password/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await safeParseJson<ForgotPasswordOtpResponse>(response);
+    if (!data) {
+      return {
+        success: false,
+        message: `Password reset OTP API unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return data;
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error?.message || 'Network error sending password reset code.',
+    };
+  }
+}
+
+/**
+ * Verifies the 6-digit Gmail code and updates the user's password on the server.
+ */
+export async function verifyOtpAndResetPassword(params: {
+  email: string;
+  otp: string;
+  newPassword: string;
+}): Promise<ForgotPasswordResetResponse> {
+  try {
+    const response = await fetch('/api/auth/forgot-password/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await safeParseJson<ForgotPasswordResetResponse>(response);
+    if (!data) {
+      return {
+        success: false,
+        passwordUpdated: false,
+        message: `Password reset API unavailable (HTTP ${response.status}).`,
+      };
+    }
+    return data;
+  } catch (error: any) {
+    return {
+      success: false,
+      passwordUpdated: false,
+      message: error?.message || 'Network error resetting password.',
     };
   }
 }
