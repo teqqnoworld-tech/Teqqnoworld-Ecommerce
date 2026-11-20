@@ -1691,11 +1691,50 @@ app.post('/api/auth/forgot-password/reset', async (req: Request, res: Response) 
       });
     }
 
-    if (newPassword.length < 6) {
+    const validateStrongServerPassword = (pw: string, emailStr: string): string | null => {
+      if (pw.length < 8) {
+        return 'Password must be at least 8 characters long (e.g. Teqqno@2026).';
+      }
+      if (/\s/.test(pw)) {
+        return 'Password cannot contain spaces.';
+      }
+      if (!/[A-Z]/.test(pw)) {
+        return 'Password must include at least 1 uppercase letter (A-Z).';
+      }
+      if (!/[a-z]/.test(pw)) {
+        return 'Password must include at least 1 lowercase letter (a-z).';
+      }
+      if (!/[0-9]/.test(pw)) {
+        return 'Password must include at least 1 number (0-9).';
+      }
+      if (!/[^A-Za-z0-9\s]/.test(pw)) {
+        return 'Password must include at least 1 special character (@, #, $, !, %, &).';
+      }
+      const lower = pw.toLowerCase();
+      const emailLocal = emailStr.toLowerCase().split('@')[0] || '';
+      if (emailLocal.length >= 4 && lower.includes(emailLocal)) {
+        return 'Password should not contain your email username.';
+      }
+      if (/(.)\1{3,}/.test(pw)) {
+        return 'Password cannot have 4 or more repeated characters in a row.';
+      }
+      const weakPatterns = [
+        '01234', '12345', '23456', '34567', '45678', '56789',
+        '98765', '87654', '76543', '65432', '54321', '43210',
+        'qwerty', 'asdfg', 'zxcvb', 'password', 'admin123', 'welcome',
+      ];
+      if (weakPatterns.some((pat) => lower.includes(pat))) {
+        return 'Password is too simple or sequential. Please choose a stronger combination (e.g. Teqqno@2026).';
+      }
+      return null;
+    };
+
+    const passwordPolicyError = validateStrongServerPassword(newPassword, cleanEmail);
+    if (passwordPolicyError) {
       return res.status(400).json({
         success: false,
         passwordUpdated: false,
-        message: 'New password must be at least 6 characters long.',
+        message: passwordPolicyError,
       });
     }
 

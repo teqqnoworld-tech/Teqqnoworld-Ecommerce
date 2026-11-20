@@ -25,6 +25,7 @@ import {
   verifyEmailVerificationOtp,
   verifyOtpAndResetPassword,
 } from '../services/emailService';
+import { evaluatePasswordStrength } from '../utils/passwordStrength';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -124,6 +125,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Validation helpers
   const isValidEmail = (emailStr: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailStr);
   const cleanMobile = (m: string) => m.replace(/[^\d]/g, '');
+
+  const regPasswordStrength = evaluatePasswordStrength(regPassword, regEmail);
+  const resetPasswordStrength = evaluatePasswordStrength(newResetPassword, resetEmail);
+
+  const renderStrengthMeter = (
+    strength: ReturnType<typeof evaluatePasswordStrength>,
+    passwordVal: string
+  ) => {
+    if (!passwordVal) return null;
+    const barColors: Record<number, string> = {
+      1: 'bg-red-500',
+      2: 'bg-amber-500',
+      3: 'bg-sky-500',
+      4: 'bg-emerald-500',
+    };
+    const textColors: Record<number, string> = {
+      1: 'text-red-400',
+      2: 'text-amber-400',
+      3: 'text-sky-400',
+      4: 'text-emerald-400',
+    };
+    return (
+      <div className="mt-2 p-2.5 rounded-xl bg-zinc-950/75 border border-zinc-800 space-y-2">
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-zinc-400 font-medium">Password Strength</span>
+          <span className={`font-bold ${textColors[strength.score] || 'text-zinc-400'}`}>
+            {strength.label}
+          </span>
+        </div>
+        <div className="grid grid-cols-4 gap-1">
+          {[1, 2, 3, 4].map((step) => (
+            <div
+              key={step}
+              className={`h-1.5 rounded-full transition-all ${
+                step <= strength.score ? barColors[strength.score] : 'bg-zinc-800'
+              }`}
+            />
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          {strength.checks.map((c) => (
+            <span
+              key={c.id}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium border ${
+                c.passed
+                  ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
+                  : 'bg-zinc-900 border-zinc-800 text-zinc-400'
+              }`}
+            >
+              <span>{c.passed ? '✓' : '•'}</span>
+              <span>{c.label}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   // -------------------------------------------------------------
   // LOGIN SUBMIT
@@ -236,8 +294,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setRegError('Please enter a valid 10-digit Indian mobile number (+91).');
       return;
     }
-    if (regPassword.length < 6) {
-      setRegError('Password must be at least 6 characters long.');
+    const pwCheck = evaluatePasswordStrength(regPassword, trimmedEmail);
+    if (!pwCheck.isValid) {
+      setRegError(pwCheck.errorMessage || 'Please create a strong password (8+ chars, A-Z, a-z, 0-9 & symbol like @#$!).');
       return;
     }
 
@@ -516,8 +575,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setResetError('Please enter the complete 6-digit verification code sent to your Gmail.');
       return;
     }
-    if (newResetPassword.length < 6) {
-      setResetError('New password must be at least 6 characters long.');
+    const resetPwCheck = evaluatePasswordStrength(newResetPassword, cleanEmail);
+    if (!resetPwCheck.isValid) {
+      setResetError(
+        resetPwCheck.errorMessage ||
+          'Please create a strong password (8+ chars, A-Z, a-z, 0-9 & symbol like @#$!).'
+      );
       return;
     }
     if (newResetPassword !== confirmResetPassword) {
@@ -827,7 +890,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* Password */}
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
-                  Create Password (min. 6 characters) *
+                  Create Strong Password (8+ chars, A-Z, a-z, 0-9 &amp; @#$!) *
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
@@ -836,9 +899,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="Enter safe password"
-                    minLength={6}
+                    onChange={(e) => {
+                      setRegPassword(e.target.value);
+                      if (regError) setRegError('');
+                    }}
+                    placeholder="e.g. Teqqno@2026"
+                    minLength={8}
                     required
                     className="w-full bg-zinc-900/90 text-white pl-9 pr-10 py-2 rounded-xl border border-zinc-700/80 focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/20 text-xs sm:text-sm outline-none transition-all placeholder:text-zinc-600"
                   />
@@ -850,6 +916,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                {renderStrengthMeter(regPasswordStrength, regPassword)}
               </div>
 
               {/* Submit Step 1 -> Send 6-Digit Email Code */}
@@ -1112,7 +1179,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <div className="space-y-1">
                     <label className="block text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
-                      New Password (min. 6 characters) *
+                      New Strong Password (8+ chars, A-Z, a-z, 0-9 &amp; @#$!) *
                     </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-500">
@@ -1125,8 +1192,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           setNewResetPassword(e.target.value);
                           if (resetError) setResetError('');
                         }}
-                        placeholder="Enter new password"
-                        minLength={6}
+                        placeholder="e.g. Teqqno@2026"
+                        minLength={8}
                         required
                         className="w-full bg-zinc-900/95 text-white pl-9 pr-10 py-2 rounded-xl border border-zinc-700 focus:border-[#FF7A00] text-xs sm:text-sm outline-none"
                       />
@@ -1138,6 +1205,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         {showNewResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    {renderStrengthMeter(resetPasswordStrength, newResetPassword)}
                   </div>
 
                   <div className="space-y-1">
@@ -1155,8 +1223,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           setConfirmResetPassword(e.target.value);
                           if (resetError) setResetError('');
                         }}
-                        placeholder="Re-enter new password"
-                        minLength={6}
+                        placeholder="Re-enter strong password"
+                        minLength={8}
                         required
                         className="w-full bg-zinc-900/95 text-white pl-9 pr-3 py-2 rounded-xl border border-zinc-700 focus:border-[#FF7A00] text-xs sm:text-sm outline-none"
                       />
@@ -1165,7 +1233,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <button
                     type="submit"
-                    disabled={resetLoading || resetOtp.length !== 6 || newResetPassword.length < 6}
+                    disabled={resetLoading || resetOtp.length !== 6 || !resetPasswordStrength.isValid}
                     className="w-full bg-[#FF7A00] hover:bg-[#E56E00] text-white font-semibold py-2.5 px-4 rounded-xl text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#FF7A00]/25 disabled:opacity-50 cursor-pointer mt-1"
                   >
                     {resetLoading ? (

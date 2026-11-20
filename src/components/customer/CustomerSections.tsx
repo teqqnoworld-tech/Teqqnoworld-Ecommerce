@@ -51,6 +51,7 @@ import {
 import { PRODUCTS } from '../../data/mockData';
 import { BUSINESS_CONFIG, getWhatsAppLink } from '../../config/business';
 import { supabase } from '../../lib/supabase';
+import { evaluatePasswordStrength } from '../../utils/passwordStrength';
 import { submitCustomOrderQuote, uploadBrandLogoToStorage } from '../../services/supabaseService';
 import { DelhiveryTrackResponse, trackDelhiveryWaybill } from '../../services/paymentAndLogisticsService';
 import { generateOrderTaxInvoicePdf, generateTaxInvoicePdf } from '../../utils/pdfGenerator';
@@ -2169,8 +2170,12 @@ export const CustomerAccountSecurityView: React.FC<{
       onToast('Sign in with your verified email session to change password', 'error');
       return;
     }
-    if (newPassword.length < 8) {
-      onToast('New password must be at least 8 characters long', 'error');
+    const pwCheck = evaluatePasswordStrength(newPassword, sessionEmail || email || user.email);
+    if (!pwCheck.isValid) {
+      onToast(
+        pwCheck.errorMessage || 'Create a strong password (8+ chars, A-Z, a-z, 0-9 & symbol like @#$!)',
+        'error'
+      );
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -2444,15 +2449,53 @@ export const CustomerAccountSecurityView: React.FC<{
           {hasSupabaseSession ? (
             <form onSubmit={handleUpdatePassword} className="space-y-3 max-w-md">
               <div>
-                <label className="text-[11px] font-bold text-slate-600">New Password (min 8 chars)</label>
+                <label className="text-[11px] font-bold text-slate-600">
+                  New Strong Password (8+ chars, A-Z, a-z, 0-9 &amp; @#$!)
+                </label>
                 <input
                   type="password"
                   required
                   minLength={8}
+                  placeholder="e.g. Teqqno@2026"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-[#0B1530]"
                 />
+                {newPassword && (() => {
+                  const s = evaluatePasswordStrength(newPassword, sessionEmail || email || user.email);
+                  const barTone =
+                    s.score === 4 ? 'bg-emerald-500' : s.score === 3 ? 'bg-sky-500' : s.score === 2 ? 'bg-amber-500' : 'bg-red-500';
+                  const labelTone =
+                    s.score === 4 ? 'text-emerald-600' : s.score === 3 ? 'text-sky-600' : s.score === 2 ? 'text-amber-600' : 'text-red-600';
+                  return (
+                    <div className="mt-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 font-medium">Password Strength</span>
+                        <span className={`font-bold ${labelTone}`}>{s.label}</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {[1, 2, 3, 4].map((n) => (
+                          <div key={n} className={`h-1.5 rounded-full ${n <= s.score ? barTone : 'bg-slate-200'}`} />
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {s.checks.map((c) => (
+                          <span
+                            key={c.id}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+                              c.passed
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                : 'bg-white border-slate-200 text-slate-500'
+                            }`}
+                          >
+                            <span>{c.passed ? '✓' : '•'}</span>
+                            <span>{c.label}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <label className="text-[11px] font-bold text-slate-600">Confirm New Password</label>
@@ -2467,8 +2510,8 @@ export const CustomerAccountSecurityView: React.FC<{
               </div>
               <button
                 type="submit"
-                disabled={passwordLoading}
-                className="px-5 py-2.5 rounded-xl bg-[#0B1530] hover:bg-[#132550] text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer min-h-[44px]"
+                disabled={passwordLoading || !evaluatePasswordStrength(newPassword, sessionEmail || email || user.email).isValid}
+                className="px-5 py-2.5 rounded-xl bg-[#0B1530] hover:bg-[#132550] disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer min-h-[44px]"
               >
                 <Lock className="w-3.5 h-3.5 text-[#FF7900]" />
                 <span>{passwordLoading ? 'Updating...' : 'Update Password'}</span>
