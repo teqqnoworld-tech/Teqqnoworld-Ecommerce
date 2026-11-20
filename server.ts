@@ -1929,6 +1929,945 @@ app.get('/api/smtp-status', (_req: Request, res: Response) => {
 });
 
 // ==============================================================================
+// 3A-4. ADMIN PANEL SECURITY (PIN + 3-STRIKE LOCKOUT + 2FA EMAIL OTP + PIN CHANGE)
+// ==============================================================================
+
+interface AdminSecurityEventRecord {
+  at: string;
+  event: string;
+  detail: string;
+}
+
+interface AdminSecurityState {
+  pinHash: string;
+  failedAttempts: number;
+  pinLocked: boolean;
+  lockedAt: string | null;
+  twoStepEnabled: boolean;
+  pinUpdatedAt: string | null;
+  lastLoginAt: string | null;
+  recentEvents: AdminSecurityEventRecord[];
+}
+
+const ADMIN_SECURITY_STORE_PATH = path.join(os.tmpdir(), 'teqqno-admin-security.json');
+const ADMIN_OTP_STORE_PATH = path.join(os.tmpdir(), 'teqqno-admin-otp.json');
+
+interface AdminOtpEntry {
+  purpose: 'admin_login' | 'reset_pin' | 'change_pin' | 'toggle_2fa';
+  hash: string;
+  expiresAt: number;
+  sentAt: number;
+  attempts: number;
+}
+
+function getAdminSecretSalt(): string {
+  return (
+    process.env.ADMIN_SECURITY_SECRET ||
+    process.env.HOSTINGER_SMTP_PASSWORD ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    'teqqno_admin_vault_salt_2026'
+  ).trim();
+}
+
+function hashAdminPin(pin: string): string {
+  return crypto
+    .createHmac('sha256', getAdminSecretSalt())
+    .update(`admin-pin:${pin.trim()}`)
+    .digest('hex');
+}
+
+function hashAdminOtp(purpose: string, otp: string): string {
+  return crypto
+    .createHmac('sha256', getAdminSecretSalt())
+    .update(`admin-otp:${purpose}:${otp.trim()}`)
+    .digest('hex');
+}
+
+function createSignedAdminToken(type: 'session' | 'challenge', ttlMs: number): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      t: type,
+      exp: Date.now() + ttlMs,
+      nonce: crypto.randomBytes(12).toString('hex'),
+    })
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', getAdminSecretSalt())
+    .update(`${type}:${payload}`)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySignedAdminToken(token: string, expectedType: 'session' | 'challenge'): boolean {
+  try {
+    const clean = String(token || '').trim();
+    const parts = clean.split('.');
+    if (parts.length !== 2) return false;
+    const [payload, sig] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', getAdminSecretSalt())
+      .update(`${expectedType}:${payload}`)
+      .digest('base64url');
+    const a = Buffer.from(sig, 'utf8');
+    const b = Buffer.from(expectedSig, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (parsed?.t !== expectedType) return false;
+    if (!parsed?.exp || Date.now() > Number(parsed.exp)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractAdminBearerToken(req: Request): string {
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  return '';
+}
+
+function maskEmailForPublic(email: string): string {
+  const clean = String(email || '').trim();
+  const [local, domain] = clean.split('@');
+  if (!local || !domain) return 'owner email';
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}***@${domain}`;
+}
+
+function loadAdminSecurityState(): AdminSecurityState {
+  const defaultSeedPin = (process.env.ADMIN_MASTER_PIN || '9949').trim();
+  try {
+    if (fs.existsSync(ADMIN_SECURITY_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(ADMIN_SECURITY_STORE_PATH, 'utf8'));
+      if (parsed && typeof parsed.pinHash === 'string' && parsed.pinHash.length >= 32) {
+        return {
+          pinHash: parsed.pinHash,
+          failedAttempts: Number(parsed.failedAttempts) || 0,
+          pinLocked: Boolean(parsed.pinLocked),
+          lockedAt: parsed.lockedAt || null,
+          twoStepEnabled: typeof parsed.twoStepEnabled === 'boolean' ? parsed.twoStepEnabled : true,
+          pinUpdatedAt: parsed.pinUpdatedAt || null,
+          lastLoginAt: parsed.lastLoginAt || null,
+          recentEvents: Array.isArray(parsed.recentEvents) ? parsed.recentEvents.slice(0, 15) : [],
+        };
+      }
+    }
+  } catch {
+    // fallback to initial state
+  }
+  const initial: AdminSecurityState = {
+    pinHash: hashAdminPin(defaultSeedPin),
+    failedAttempts: 0,
+    pinLocked: false,
+    lockedAt: null,
+    twoStepEnabled: true,
+    pinUpdatedAt: null,
+    lastLoginAt: null,
+    recentEvents: [],
+  };
+  saveAdminSecurityState(initial);
+  return initial;
+}
+
+function saveAdminSecurityState(state: AdminSecurityState) {
+  try {
+    fs.writeFileSync(ADMIN_SECURITY_STORE_PATH, JSON.stringify(state, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Admin Security Store Write Warning]:', err);
+  }
+}
+
+function appendAdminSecurityEvent(state: AdminSecurityState, event: string, detail: string) {
+  state.recentEvents = [
+    { at: new Date().toISOString(), event, detail },
+    ...(Array.isArray(state.recentEvents) ? state.recentEvents : []),
+  ].slice(0, 15);
+}
+
+function loadAdminOtpStore(): Record<string, AdminOtpEntry> {
+  try {
+    if (fs.existsSync(ADMIN_OTP_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(ADMIN_OTP_STORE_PATH, 'utf8'));
+      const now = Date.now();
+      const cleaned: Record<string, AdminOtpEntry> = {};
+      for (const [k, rec] of Object.entries(parsed || {})) {
+        const entry = rec as AdminOtpEntry;
+        if (entry && entry.expiresAt > now) cleaned[k] = entry;
+      }
+      return cleaned;
+    }
+  } catch {
+    // ignore corrupt otp file
+  }
+  return {};
+}
+
+function saveAdminOtpStore(store: Record<string, AdminOtpEntry>) {
+  try {
+    fs.writeFileSync(ADMIN_OTP_STORE_PATH, JSON.stringify(store), 'utf8');
+  } catch (err) {
+    console.warn('[Admin OTP Store Write Warning]:', err);
+  }
+}
+
+function validateNewAdminPin(pin: string): string | null {
+  const clean = String(pin || '').trim();
+  if (!/^[0-9]{4,8}$/.test(clean)) {
+    return 'Admin PIN must be 4 to 8 numeric digits.';
+  }
+  const weakPins = new Set([
+    '0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999',
+    '1234', '4321', '12345', '54321', '123456', '654321', '12345678', '000000', '111111',
+  ]);
+  if (weakPins.has(clean) || /^(\d)\1+$/.test(clean)) {
+    return 'This PIN is too easy to guess (avoid 1234, 0000, 1111, etc.). Please choose a stronger 4-8 digit PIN.';
+  }
+  return null;
+}
+
+async function sendOwnerAdminSecurityEmail(params: {
+  subject: string;
+  badge: string;
+  heading: string;
+  bodyText: string;
+  otpCode?: string;
+  note?: string;
+}): Promise<{ sent: boolean; simulated: boolean }> {
+  const cfg = getSmtpConfig();
+  const transporter = getSmtpTransporter();
+  if (!transporter) {
+    console.log('[Admin Security Email - Simulation Mode]', {
+      to: cfg.adminEmailList,
+      subject: params.subject,
+      otpCode: params.otpCode,
+    });
+    return { sent: true, simulated: true };
+  }
+
+  const spacedOtp = params.otpCode
+    ? `${params.otpCode.slice(0, 3)} ${params.otpCode.slice(3)}`
+    : '';
+  const timeIst = new Date().toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0F172A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="540" cellspacing="0" cellpadding="0" style="max-width:540px;width:100%;background-color:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E2E8F0;">
+          <tr>
+            <td style="background-color:#071B35;padding:20px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:21px;font-weight:800;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#CBD5E1;margin-top:3px;">
+                ${escapeHtml(params.badge)}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;text-align:center;">
+              <h1 style="margin:0 0 10px 0;font-size:20px;color:#0F172A;">
+                ${escapeHtml(params.heading)}
+              </h1>
+              <p style="margin:0 0 18px 0;font-size:14px;line-height:1.6;color:#334155;">
+                ${escapeHtml(params.bodyText)}
+              </p>
+              ${
+                spacedOtp
+                  ? `<div style="display:inline-block;background-color:#FFF7ED;border:2px solid #FF7900;border-radius:12px;padding:16px 32px;margin:4px 0 20px;">
+                <div style="font-family:'Courier New',Courier,monospace;font-size:32px;font-weight:800;letter-spacing:8px;color:#C2410C;">
+                  ${escapeHtml(spacedOtp)}
+                </div>
+              </div>`
+                  : ''
+              }
+              <p style="margin:0;font-size:12px;color:#64748B;">
+                ${escapeHtml(params.note || `Time: ${timeIst} IST. If you did not initiate this action, change your Admin PIN immediately.`)}
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#F8FAFC;padding:14px 28px;border-top:1px solid #E2E8F0;text-align:center;font-size:11px;color:#64748B;">
+              &copy; ${new Date().getFullYear()} TeqqnoWorld Admin Security &bull; Hyderabad, India
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    params.heading,
+    '',
+    params.bodyText,
+    params.otpCode ? `\nVerification Code: ${params.otpCode}\n` : '',
+    params.note || `Time: ${timeIst} IST.`,
+  ].join('\n');
+
+  await transporter.sendMail({
+    from: `"TeqqnoWorld Admin Security" <${cfg.smtpUser}>`,
+    to: cfg.adminEmailList.join(', '),
+    replyTo: cfg.smtpUser,
+    subject: params.subject,
+    text,
+    html,
+  });
+  return { sent: true, simulated: false };
+}
+
+function verifyStoredAdminOtp(
+  purpose: AdminOtpEntry['purpose'],
+  rawOtp: string
+): { valid: boolean; error?: string } {
+  const cleanOtp = String(rawOtp || '').replace(/[^0-9]/g, '');
+  if (cleanOtp.length !== 6) {
+    return { valid: false, error: 'Please enter the exact 6-digit verification code sent to Owner Email.' };
+  }
+  const store = loadAdminOtpStore();
+  const rec = store[purpose];
+  if (!rec || Date.now() > rec.expiresAt) {
+    delete store[purpose];
+    saveAdminOtpStore(store);
+    return { valid: false, error: 'Verification code has expired. Please request a fresh 6-digit code.' };
+  }
+  if (rec.attempts >= 5) {
+    delete store[purpose];
+    saveAdminOtpStore(store);
+    return { valid: false, error: 'Too many wrong code attempts. Please request a fresh 6-digit code.' };
+  }
+  const expected = hashAdminOtp(purpose, cleanOtp);
+  const a = Buffer.from(rec.hash, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    rec.attempts += 1;
+    store[purpose] = rec;
+    saveAdminOtpStore(store);
+    const left = Math.max(0, 5 - rec.attempts);
+    return {
+      valid: false,
+      error:
+        left > 0
+          ? `Incorrect verification code. ${left} attempt${left === 1 ? '' : 's'} remaining.`
+          : 'Too many wrong code attempts. Please request a fresh 6-digit code.',
+    };
+  }
+  delete store[purpose];
+  saveAdminOtpStore(store);
+  return { valid: true };
+}
+
+// 1. Public Admin Gate Status (never reveals PIN or full email)
+app.get('/api/admin/auth/status', (_req: Request, res: Response) => {
+  const state = loadAdminSecurityState();
+  const cfg = getSmtpConfig();
+  return res.json({
+    pinLocked: state.pinLocked,
+    failedAttempts: state.failedAttempts,
+    maxAttempts: 3,
+    twoStepEnabled: state.twoStepEnabled,
+    maskedOwnerEmail: maskEmailForPublic(cfg.primaryAdminEmail),
+    smtpConfigured: Boolean(cfg.smtpUser && cfg.smtpPass),
+  });
+});
+
+// 2. Step 1 Admin Login: Verify Master PIN (strict 3-wrong-PIN lockout + 2FA Email OTP trigger)
+app.post('/api/admin/auth/verify-pin', async (req: Request, res: Response) => {
+  try {
+    const pin = String(req.body?.pin || '').trim();
+    const state = loadAdminSecurityState();
+    const cfg = getSmtpConfig();
+    const maskedOwnerEmail = maskEmailForPublic(cfg.primaryAdminEmail);
+
+    if (state.pinLocked) {
+      return res.status(423).json({
+        success: false,
+        pinLocked: true,
+        failedAttempts: state.failedAttempts,
+        attemptsRemaining: 0,
+        maskedOwnerEmail,
+        message:
+          'Admin Panel is LOCKED after 3 wrong PIN attempts. Owner must verify the 6-digit Email code and create a new PIN.',
+      });
+    }
+
+    if (!pin) {
+      return res.status(400).json({
+        success: false,
+        pinLocked: false,
+        failedAttempts: state.failedAttempts,
+        attemptsRemaining: Math.max(0, 3 - state.failedAttempts),
+        message: 'Please enter your Admin Master PIN.',
+      });
+    }
+
+    const enteredHash = hashAdminPin(pin);
+    const a = Buffer.from(enteredHash, 'utf8');
+    const b = Buffer.from(state.pinHash, 'utf8');
+    const pinMatches = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+    if (!pinMatches) {
+      state.failedAttempts += 1;
+      if (state.failedAttempts >= 3) {
+        state.pinLocked = true;
+        state.lockedAt = new Date().toISOString();
+        appendAdminSecurityEvent(
+          state,
+          'Admin Panel Locked (3 Wrong PINs)',
+          '3 consecutive wrong PIN attempts detected. Mandatory Owner Email OTP PIN reset activated.'
+        );
+        saveAdminSecurityState(state);
+
+        // Alert owner immediately by email
+        sendOwnerAdminSecurityEmail({
+          subject: 'Security Alert: TeqqnoWorld Admin Panel locked after 3 wrong PIN attempts',
+          badge: 'Urgent Admin Security Alert',
+          heading: 'Admin Panel Locked (3 Failed PIN Attempts)',
+          bodyText:
+            'Someone entered the wrong TeqqnoWorld Admin PIN 3 times in a row. For your protection, the Admin Panel has been automatically locked. To unlock it, open the Admin Panel, request a 6-digit Owner Email verification code, and set a new Admin PIN.',
+        }).catch((e) => console.warn('[Admin Lockout Alert Email Warning]:', e));
+
+        return res.status(423).json({
+          success: false,
+          pinLocked: true,
+          failedAttempts: state.failedAttempts,
+          attemptsRemaining: 0,
+          maskedOwnerEmail,
+          message:
+            '3 wrong PIN attempts detected! Admin Panel is now LOCKED. Verify Owner Email code to create a new PIN.',
+        });
+      }
+
+      const remaining = Math.max(0, 3 - state.failedAttempts);
+      appendAdminSecurityEvent(
+        state,
+        'Failed Admin PIN Attempt',
+        `Wrong PIN entered (${state.failedAttempts}/3 attempts used).`
+      );
+      saveAdminSecurityState(state);
+
+      return res.status(401).json({
+        success: false,
+        pinLocked: false,
+        failedAttempts: state.failedAttempts,
+        attemptsRemaining: remaining,
+        maskedOwnerEmail,
+        message: `Incorrect Admin PIN. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before security lockout.`,
+      });
+    }
+
+    // Correct PIN -> reset failed attempt counter
+    state.failedAttempts = 0;
+
+    if (state.twoStepEnabled) {
+      const otp = String(crypto.randomInt(100000, 999999));
+      const otpStore = loadAdminOtpStore();
+      otpStore.admin_login = {
+        purpose: 'admin_login',
+        hash: hashAdminOtp('admin_login', otp),
+        expiresAt: Date.now() + 5 * 60 * 1000, // 5 mins
+        sentAt: Date.now(),
+        attempts: 0,
+      };
+      saveAdminOtpStore(otpStore);
+      saveAdminSecurityState(state);
+
+      const mailRes = await sendOwnerAdminSecurityEmail({
+        subject: `${otp} is your TeqqnoWorld Admin login code`,
+        badge: 'Admin 2-Step Verification',
+        heading: 'Verify your Admin Hub login',
+        bodyText:
+          'Your Admin Master PIN was verified. Enter this 6-digit code to finish signing in to the TeqqnoWorld Admin Operations Hub:',
+        otpCode: otp,
+        note: 'This code expires in 5 minutes. Never share this code with anyone.',
+      });
+
+      const challengeToken = createSignedAdminToken('challenge', 5 * 60 * 1000);
+      return res.status(200).json({
+        success: true,
+        requiresTwoStep: true,
+        challengeToken,
+        maskedOwnerEmail,
+        simulated: mailRes.simulated,
+        devOtp: mailRes.simulated ? otp : undefined,
+        message: `PIN verified! 6-digit login code sent to Owner Email (${maskedOwnerEmail}).`,
+      });
+    }
+
+    // 2-Step Verification OFF -> Issue 12-hour Admin Session Token directly
+    state.lastLoginAt = new Date().toISOString();
+    appendAdminSecurityEvent(state, 'Admin Login Successful', 'Signed in with Master PIN.');
+    saveAdminSecurityState(state);
+
+    const sessionToken = createSignedAdminToken('session', 12 * 60 * 60 * 1000);
+    return res.status(200).json({
+      success: true,
+      requiresTwoStep: false,
+      sessionToken,
+      message: 'Admin Operations Hub unlocked.',
+    });
+  } catch (err: any) {
+    console.error('[Admin Verify PIN Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to verify Admin PIN.',
+    });
+  }
+});
+
+// 3. Step 2 Admin Login: Verify 6-Digit Owner Email 2FA Code
+app.post('/api/admin/auth/verify-login-otp', (req: Request, res: Response) => {
+  try {
+    const challengeToken = String(req.body?.challengeToken || '').trim();
+    const otp = String(req.body?.otp || '').trim();
+
+    if (!verifySignedAdminToken(challengeToken, 'challenge')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Login verification session expired. Please re-enter your Admin PIN.',
+      });
+    }
+
+    const otpCheck = verifyStoredAdminOtp('admin_login', otp);
+    if (!otpCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        message: otpCheck.error || 'Invalid 6-digit verification code.',
+      });
+    }
+
+    const state = loadAdminSecurityState();
+    state.lastLoginAt = new Date().toISOString();
+    state.failedAttempts = 0;
+    appendAdminSecurityEvent(
+      state,
+      'Admin Login Successful (2-Step Verified)',
+      'Master PIN + 6-digit Owner Email verification code passed.'
+    );
+    saveAdminSecurityState(state);
+
+    const sessionToken = createSignedAdminToken('session', 12 * 60 * 60 * 1000);
+    return res.status(200).json({
+      success: true,
+      sessionToken,
+      message: '2-Step Verification successful! Opening Admin Operations Hub...',
+    });
+  } catch (err: any) {
+    console.error('[Admin Verify Login OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to verify login code.',
+    });
+  }
+});
+
+// 3b. Resend Admin 2-Step Login Code (requires valid challengeToken)
+app.post('/api/admin/auth/resend-login-otp', async (req: Request, res: Response) => {
+  try {
+    const challengeToken = String(req.body?.challengeToken || '').trim();
+    if (!verifySignedAdminToken(challengeToken, 'challenge')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Login session expired. Please re-enter your Admin PIN.',
+      });
+    }
+
+    const otpStore = loadAdminOtpStore();
+    const existing = otpStore.admin_login;
+    const now = Date.now();
+    if (existing && now - existing.sentAt < 25_000) {
+      const waitSec = Math.ceil((25_000 - (now - existing.sentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec: waitSec,
+        message: `Please wait ${waitSec}s before requesting another code.`,
+      });
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    otpStore.admin_login = {
+      purpose: 'admin_login',
+      hash: hashAdminOtp('admin_login', otp),
+      expiresAt: now + 5 * 60 * 1000,
+      sentAt: now,
+      attempts: 0,
+    };
+    saveAdminOtpStore(otpStore);
+
+    const cfg = getSmtpConfig();
+    const maskedOwnerEmail = maskEmailForPublic(cfg.primaryAdminEmail);
+    const mailRes = await sendOwnerAdminSecurityEmail({
+      subject: `${otp} is your TeqqnoWorld Admin login code`,
+      badge: 'Admin 2-Step Verification',
+      heading: 'New Admin login verification code',
+      bodyText: 'Enter this 6-digit code to finish signing in to the TeqqnoWorld Admin Hub:',
+      otpCode: otp,
+      note: 'This code expires in 5 minutes.',
+    });
+
+    return res.status(200).json({
+      success: true,
+      maskedOwnerEmail,
+      simulated: mailRes.simulated,
+      devOtp: mailRes.simulated ? otp : undefined,
+      expiresInMinutes: 5,
+      message: `New 6-digit login code sent to Owner Email (${maskedOwnerEmail}).`,
+    });
+  } catch (err: any) {
+    console.error('[Admin Resend Login OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to resend login verification code.',
+    });
+  }
+});
+
+// 4. Send 6-Digit Owner Email Verification Code (for Lockout PIN Reset, Dashboard PIN Change, or 2FA Disable)
+app.post('/api/admin/auth/send-pin-reset-otp', async (req: Request, res: Response) => {
+  try {
+    const rawPurpose = String(req.body?.purpose || 'reset_pin');
+    const purpose: AdminOtpEntry['purpose'] =
+      rawPurpose === 'change_pin'
+        ? 'change_pin'
+        : rawPurpose === 'toggle_2fa'
+        ? 'toggle_2fa'
+        : 'reset_pin';
+
+    // Dashboard-only purposes require a valid authenticated admin session
+    if (purpose === 'change_pin' || purpose === 'toggle_2fa') {
+      const token = extractAdminBearerToken(req);
+      if (!verifySignedAdminToken(token, 'session')) {
+        return res.status(401).json({
+          success: false,
+          message: 'Admin session expired. Please unlock Admin Hub again.',
+        });
+      }
+    }
+
+    const otpStore = loadAdminOtpStore();
+    const existing = otpStore[purpose];
+    const now = Date.now();
+    if (existing && now - existing.sentAt < 25_000) {
+      const waitSec = Math.ceil((25_000 - (now - existing.sentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec: waitSec,
+        message: `Please wait ${waitSec}s before requesting a new verification code.`,
+      });
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    otpStore[purpose] = {
+      purpose,
+      hash: hashAdminOtp(purpose, otp),
+      expiresAt: now + 10 * 60 * 1000,
+      sentAt: now,
+      attempts: 0,
+    };
+    saveAdminOtpStore(otpStore);
+
+    const cfg = getSmtpConfig();
+    const maskedOwnerEmail = maskEmailForPublic(cfg.primaryAdminEmail);
+
+    const emailCopy =
+      purpose === 'change_pin'
+        ? {
+            subject: `${otp} is your TeqqnoWorld Admin PIN change code`,
+            badge: 'Admin PIN Change Verification',
+            heading: 'Verify Owner Email to Change Admin PIN',
+            bodyText:
+              'Enter this 6-digit verification code in your TeqqnoWorld Admin Security settings to save your new Master PIN:',
+          }
+        : purpose === 'toggle_2fa'
+        ? {
+            subject: `${otp} is your TeqqnoWorld Admin 2FA change code`,
+            badge: 'Admin 2-Step Verification Setting',
+            heading: 'Verify Owner Email to Update 2-Step Verification',
+            bodyText:
+              'Enter this 6-digit code in Admin Security settings to confirm turning OFF 2-Step Email Verification:',
+          }
+        : {
+            subject: `${otp} is your TeqqnoWorld Admin PIN reset code`,
+            badge: 'Admin PIN Recovery Verification',
+            heading: 'Verify Owner Email to Reset Admin PIN',
+            bodyText:
+              'Enter this 6-digit verification code on the TeqqnoWorld Admin Panel screen to set a new Master PIN and unlock access:',
+          };
+
+    const mailRes = await sendOwnerAdminSecurityEmail({
+      ...emailCopy,
+      otpCode: otp,
+      note: 'This code is valid for 10 minutes. Never share it with anyone.',
+    });
+
+    return res.status(200).json({
+      success: true,
+      maskedOwnerEmail,
+      expiresInMinutes: 10,
+      simulated: mailRes.simulated,
+      devOtp: mailRes.simulated ? otp : undefined,
+      message: `6-digit verification code sent to Owner Email (${maskedOwnerEmail}).`,
+    });
+  } catch (err: any) {
+    console.error('[Admin Send PIN Reset OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to send Owner verification code.',
+    });
+  }
+});
+
+// 5. Reset Locked / Forgotten Admin PIN using Owner Email 6-Digit Code
+app.post('/api/admin/auth/reset-pin', async (req: Request, res: Response) => {
+  try {
+    const otp = String(req.body?.otp || '').trim();
+    const newPin = String(req.body?.newPin || '').trim();
+
+    const pinValidationErr = validateNewAdminPin(newPin);
+    if (pinValidationErr) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: pinValidationErr,
+      });
+    }
+
+    const otpCheck = verifyStoredAdminOtp('reset_pin', otp);
+    if (!otpCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: otpCheck.error || 'Invalid or expired Owner verification code.',
+      });
+    }
+
+    const state = loadAdminSecurityState();
+    state.pinHash = hashAdminPin(newPin);
+    state.failedAttempts = 0;
+    state.pinLocked = false;
+    state.lockedAt = null;
+    state.pinUpdatedAt = new Date().toISOString();
+    appendAdminSecurityEvent(
+      state,
+      'Admin PIN Reset & Panel Unlocked',
+      'Owner verified 6-digit email code and configured a new Admin Master PIN.'
+    );
+    saveAdminSecurityState(state);
+
+    sendOwnerAdminSecurityEmail({
+      subject: 'Your TeqqnoWorld Admin PIN was updated',
+      badge: 'Admin Security Confirmation',
+      heading: 'Admin Master PIN Updated & Unlocked',
+      bodyText:
+        'Your TeqqnoWorld Admin Panel Master PIN has been successfully changed via Owner Email verification and any lockout has been cleared.',
+    }).catch((e) => console.warn('[Admin PIN Reset Confirm Mail Warning]:', e));
+
+    return res.status(200).json({
+      success: true,
+      pinUpdated: true,
+      message: 'New Admin PIN saved and panel unlocked! You can now sign in with your new PIN.',
+    });
+  } catch (err: any) {
+    console.error('[Admin Reset PIN Error]:', err);
+    return res.status(500).json({
+      success: false,
+      pinUpdated: false,
+      message: err?.message || 'Failed to reset Admin PIN.',
+    });
+  }
+});
+
+// 6. Authenticated Admin Security Summary
+app.get('/api/admin/security/summary', (req: Request, res: Response) => {
+  const token = extractAdminBearerToken(req);
+  if (!verifySignedAdminToken(token, 'session')) {
+    return res.status(401).json({
+      success: false,
+      unauthorized: true,
+      message: 'Admin session expired. Please unlock Admin Hub again.',
+    });
+  }
+  const state = loadAdminSecurityState();
+  const cfg = getSmtpConfig();
+  return res.json({
+    success: true,
+    twoStepEnabled: state.twoStepEnabled,
+    pinLocked: state.pinLocked,
+    failedAttempts: state.failedAttempts,
+    maxAttempts: 3,
+    maskedOwnerEmail: maskEmailForPublic(cfg.primaryAdminEmail),
+    ownerEmailsCount: cfg.adminEmailList.length,
+    pinUpdatedAt: state.pinUpdatedAt,
+    lastLoginAt: state.lastLoginAt,
+    recentEvents: state.recentEvents,
+  });
+});
+
+// 7. Authenticated Dashboard: Change Admin PIN (Current PIN + Owner Email 6-Digit Code + New PIN)
+app.post('/api/admin/security/change-pin', async (req: Request, res: Response) => {
+  try {
+    const token = extractAdminBearerToken(req);
+    if (!verifySignedAdminToken(token, 'session')) {
+      return res.status(401).json({
+        success: false,
+        pinUpdated: false,
+        message: 'Admin session expired. Please sign in again.',
+      });
+    }
+
+    const currentPin = String(req.body?.currentPin || '').trim();
+    const otp = String(req.body?.otp || '').trim();
+    const newPin = String(req.body?.newPin || '').trim();
+
+    const state = loadAdminSecurityState();
+    const currHash = hashAdminPin(currentPin);
+    const a = Buffer.from(currHash, 'utf8');
+    const b = Buffer.from(state.pinHash, 'utf8');
+    if (!currentPin || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: 'Current Admin PIN is incorrect.',
+      });
+    }
+
+    if (currentPin === newPin) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: 'New PIN must be different from your current PIN.',
+      });
+    }
+
+    const pinErr = validateNewAdminPin(newPin);
+    if (pinErr) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: pinErr,
+      });
+    }
+
+    const otpCheck = verifyStoredAdminOtp('change_pin', otp);
+    if (!otpCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        pinUpdated: false,
+        message: otpCheck.error || 'Invalid or expired Owner verification code.',
+      });
+    }
+
+    state.pinHash = hashAdminPin(newPin);
+    state.failedAttempts = 0;
+    state.pinLocked = false;
+    state.pinUpdatedAt = new Date().toISOString();
+    appendAdminSecurityEvent(
+      state,
+      'Admin PIN Changed from Dashboard',
+      'Owner verified Current PIN + 6-digit email code and updated Master PIN.'
+    );
+    saveAdminSecurityState(state);
+
+    sendOwnerAdminSecurityEmail({
+      subject: 'Your TeqqnoWorld Admin PIN was changed',
+      badge: 'Admin Security Confirmation',
+      heading: 'Admin Master PIN Changed',
+      bodyText:
+        'Your TeqqnoWorld Admin Panel Master PIN was updated from the Admin Dashboard after Owner Email verification.',
+    }).catch((e) => console.warn('[Admin PIN Change Mail Warning]:', e));
+
+    return res.status(200).json({
+      success: true,
+      pinUpdated: true,
+      message: 'Admin Master PIN updated successfully!',
+    });
+  } catch (err: any) {
+    console.error('[Admin Change PIN Error]:', err);
+    return res.status(500).json({
+      success: false,
+      pinUpdated: false,
+      message: err?.message || 'Failed to update Admin PIN.',
+    });
+  }
+});
+
+// 8. Authenticated Dashboard: Toggle 2-Step Email OTP Verification ON / OFF
+app.post('/api/admin/security/toggle-2fa', async (req: Request, res: Response) => {
+  try {
+    const token = extractAdminBearerToken(req);
+    if (!verifySignedAdminToken(token, 'session')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Admin session expired. Please sign in again.',
+      });
+    }
+
+    const enabled = Boolean(req.body?.enabled);
+    const otp = String(req.body?.otp || '').trim();
+    const state = loadAdminSecurityState();
+
+    // Turning OFF 2FA requires Owner Email 6-digit verification code
+    if (!enabled && state.twoStepEnabled) {
+      const otpCheck = verifyStoredAdminOtp('toggle_2fa', otp);
+      if (!otpCheck.valid) {
+        return res.status(400).json({
+          success: false,
+          requiresOtp: true,
+          message: otpCheck.error || 'Enter the 6-digit Owner Email code to turn OFF 2-Step Verification.',
+        });
+      }
+    }
+
+    state.twoStepEnabled = enabled;
+    appendAdminSecurityEvent(
+      state,
+      enabled ? '2-Step Verification Enabled' : '2-Step Verification Turned OFF',
+      enabled
+        ? 'Every Admin login now requires Master PIN + 6-digit Owner Email code.'
+        : 'Owner confirmed turning OFF 2-Step Verification via email code.'
+    );
+    saveAdminSecurityState(state);
+
+    sendOwnerAdminSecurityEmail({
+      subject: `TeqqnoWorld Admin 2-Step Verification ${enabled ? 'Enabled' : 'Disabled'}`,
+      badge: 'Admin Security Notice',
+      heading: `2-Step Verification ${enabled ? 'Enabled' : 'Turned OFF'}`,
+      bodyText: enabled
+        ? 'Two-Step Email OTP Verification is now ACTIVE on your TeqqnoWorld Admin Panel. Every login requires both Master PIN and a 6-digit Owner Email code.'
+        : 'Two-Step Email OTP Verification was turned OFF from your Admin Security panel. Note that the 3-wrong-PIN auto lockout remains active.',
+    }).catch((e) => console.warn('[Admin 2FA Toggle Mail Warning]:', e));
+
+    return res.status(200).json({
+      success: true,
+      twoStepEnabled: state.twoStepEnabled,
+      message: enabled
+        ? '2-Step Email Verification enabled for Admin Panel!'
+        : '2-Step Email Verification turned OFF.',
+    });
+  } catch (err: any) {
+    console.error('[Admin Toggle 2FA Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to update 2-Step Verification.',
+    });
+  }
+});
+
+// ==============================================================================
 // 3B. RAZORPAY PAYMENT GATEWAY ROUTES (100% PREPAID + 50% PARTIAL ADVANCE, NO COD)
 // ==============================================================================
 

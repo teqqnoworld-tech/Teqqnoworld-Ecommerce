@@ -292,19 +292,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <Receipt className="w-3.5 h-3.5 text-zinc-500" />
                           <span>GST Tax Invoices</span>
                         </button>
-
-                        <button
-                          onClick={() => onNavigate('admin')}
-                          className="w-full text-left px-4 py-2.5 bg-orange-50/70 hover:bg-orange-100/80 text-[#FF7A00] font-bold flex items-center justify-between min-h-[40px] border-t border-orange-100/80"
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <ShieldAlert className="w-3.5 h-3.5 text-[#FF7A00]" />
-                            <span>Admin Operations Hub</span>
-                          </div>
-                          <span className="text-[9px] font-mono bg-[#FF7A00] text-white px-1.5 py-0.5 rounded font-bold">
-                            PIN: 9949
-                          </span>
-                        </button>
                       </div>
 
                       <div className="pt-1 border-t border-zinc-100">
@@ -632,19 +619,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ) : (
                   <span className="text-[10px] text-[#FF7A00] font-semibold">SIGN IN</span>
                 )}
-              </button>
-
-              <button
-                onClick={() => { onNavigate('admin'); setMobileMenuOpen(false); }}
-                className="text-left px-3.5 py-3 rounded-xl bg-orange-50 border border-orange-200/80 text-[#FF7A00] font-bold flex items-center justify-between min-h-[44px]"
-              >
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-[#FF7A00]" />
-                  <span>Admin Operations Hub</span>
-                </div>
-                <span className="text-[9px] bg-[#FF7A00] text-white px-2 py-0.5 rounded-full font-mono font-bold">
-                  PIN 9949
-                </span>
               </button>
             </div>
 

@@ -9,7 +9,8 @@ export type AdminSection =
   | 'customers'
   | 'marketing'
   | 'analytics'
-  | 'integrations';
+  | 'integrations'
+  | 'security';
 
 export type OrdersSubMode = 'queue' | 'all' | OrderStatus;
 

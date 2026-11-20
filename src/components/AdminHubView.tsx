@@ -44,6 +44,9 @@ import {
   SlidersHorizontal,
   MoreHorizontal,
   Box,
+  ShieldCheck,
+  KeyRound,
+  EyeOff,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import {
@@ -112,29 +115,59 @@ import {
   IntegrationsSetupView,
   AnalyticsSummary,
 } from './admin/AdminSubViews';
+import { AdminSecurityPanel } from './admin/AdminSecurityPanel';
+import {
+  clearStoredAdminToken,
+  getAdminAuthStatus,
+  resendAdminLoginOtp,
+  resetAdminPinWithOtp,
+  sendAdminPinResetOtp,
+  setStoredAdminToken,
+  verifyAdminLoginOtp,
+  verifyAdminPin,
+  verifyAdminSession,
+} from '../services/adminSecurityService';
 
 interface AdminHubViewProps {
   onBackToStore: () => void;
   onNavigateToOrderTracking?: (orderNumber: string) => void;
 }
 
-const DEFAULT_PIN = '9949';
 const LOGO_BADGE_SRC = '/assets/aistudio/Glossy_TeqqnoWorld_Branding_Badge-photoaidcom-cropped_1055f8dc.png';
 
 export const AdminHubView: React.FC<AdminHubViewProps> = ({
   onBackToStore,
   onNavigateToOrderTracking,
 }) => {
-  // Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('teqqno_admin_auth') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // Server-Authoritative Authentication & Security Gate State
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [checkingSession, setCheckingSession] = useState<boolean>(true);
+  const [gateMode, setGateMode] = useState<'pin' | 'two_step' | 'locked_reset'>('pin');
+  const [pinLocked, setPinLocked] = useState<boolean>(false);
+  const [twoStepEnabled, setTwoStepEnabled] = useState<boolean>(true);
+  const [failedAttempts, setFailedAttempts] = useState<number>(0);
+  const [maskedOwnerEmail, setMaskedOwnerEmail] = useState<string>('owner email');
+
+  // Step 1: PIN Entry
   const [enteredPin, setEnteredPin] = useState<string>('');
+  const [showEnteredPin, setShowEnteredPin] = useState<boolean>(false);
   const [pinError, setPinError] = useState<string | null>(null);
+  const [pinSuccess, setPinSuccess] = useState<string | null>(null);
+  const [authSubmitting, setAuthSubmitting] = useState<boolean>(false);
+
+  // Step 2: 2-Step Email OTP Entry
+  const [challengeToken, setChallengeToken] = useState<string>('');
+  const [loginOtp, setLoginOtp] = useState<string>('');
+  const [loginOtpInfo, setLoginOtpInfo] = useState<string>('');
+  const [loginOtpCooldown, setLoginOtpCooldown] = useState<number>(0);
+
+  // Step 3: Locked / Forgot PIN -> Owner Email OTP + New PIN
+  const [resetPinOtp, setResetPinOtp] = useState<string>('');
+  const [newAdminPin, setNewAdminPin] = useState<string>('');
+  const [confirmAdminPin, setConfirmAdminPin] = useState<string>('');
+  const [resetOtpSent, setResetOtpSent] = useState<boolean>(false);
+  const [resetOtpInfo, setResetOtpInfo] = useState<string>('');
+  const [resetOtpCooldown, setResetOtpCooldown] = useState<number>(0);
 
   // Navigation & Responsive UI State
   const [activeSection, setActiveSection] = useState<AdminSection>('orders');
@@ -311,30 +344,239 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Verify existing signed session token & fetch Admin Gate lockout/2FA status on mount
+  useEffect(() => {
+    let active = true;
+    const initAdminAuth = async () => {
+      try {
+        const [sessionValid, status] = await Promise.all([
+          verifyAdminSession(),
+          getAdminAuthStatus(),
+        ]);
+        if (!active) return;
+        setPinLocked(status.pinLocked);
+        setFailedAttempts(status.failedAttempts);
+        setTwoStepEnabled(status.twoStepEnabled);
+        setMaskedOwnerEmail(status.maskedOwnerEmail || 'owner email');
+        if (sessionValid) {
+          setIsAuthenticated(true);
+        } else {
+          clearStoredAdminToken();
+          setIsAuthenticated(false);
+          if (status.pinLocked) {
+            setGateMode('locked_reset');
+          }
+        }
+      } finally {
+        if (active) setCheckingSession(false);
+      }
+    };
+    void initAdminAuth();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Cooldown timers for Admin OTP resend buttons
+  useEffect(() => {
+    if (loginOtpCooldown <= 0) return;
+    const t = setTimeout(() => setLoginOtpCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [loginOtpCooldown]);
+
+  useEffect(() => {
+    if (resetOtpCooldown <= 0) return;
+    const t = setTimeout(() => setResetOtpCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [resetOtpCooldown]);
+
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [orderSearchQuery, statusFilter, paymentFilter, sortBy, pageSize]);
 
-  const handleUnlock = (e?: React.FormEvent) => {
+  const handleUnlock = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (enteredPin === DEFAULT_PIN) {
+    setPinError(null);
+    setPinSuccess(null);
+
+    if (!enteredPin.trim()) {
+      setPinError('Please enter your Admin Master PIN.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const res = await verifyAdminPin(enteredPin.trim());
+      if (typeof res.failedAttempts === 'number') setFailedAttempts(res.failedAttempts);
+      if (res.maskedOwnerEmail) setMaskedOwnerEmail(res.maskedOwnerEmail);
+
+      if (res.pinLocked) {
+        setPinLocked(true);
+        setGateMode('locked_reset');
+        setEnteredPin('');
+        setResetOtpSent(false);
+        setResetOtpInfo('');
+        setPinError(res.message);
+        return;
+      }
+
+      if (!res.success) {
+        setPinError(res.message || 'Incorrect Admin PIN.');
+        return;
+      }
+
+      if (res.requiresTwoStep && res.challengeToken) {
+        setChallengeToken(res.challengeToken);
+        setLoginOtp('');
+        setLoginOtpCooldown(30);
+        setLoginOtpInfo(
+          res.simulated && res.devOtp
+            ? `Simulation Mode: Admin login code is ${res.devOtp}.`
+            : `PIN verified! 6-digit login code sent to Owner Email (${res.maskedOwnerEmail || maskedOwnerEmail}).`
+        );
+        setGateMode('two_step');
+        return;
+      }
+
+      if (res.sessionToken) {
+        setStoredAdminToken(res.sessionToken);
+        setIsAuthenticated(true);
+        setEnteredPin('');
+        setPinError(null);
+      }
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleVerifyLoginOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError(null);
+    const cleanOtp = loginOtp.replace(/[^0-9]/g, '').trim();
+    if (cleanOtp.length !== 6) {
+      setPinError('Please enter the 6-digit code sent to Owner Email.');
+      return;
+    }
+    setAuthSubmitting(true);
+    try {
+      const res = await verifyAdminLoginOtp(challengeToken, cleanOtp);
+      if (!res.success || !res.sessionToken) {
+        setPinError(res.message || 'Invalid verification code.');
+        return;
+      }
+      setStoredAdminToken(res.sessionToken);
       setIsAuthenticated(true);
-      setPinError(null);
-      try {
-        localStorage.setItem('teqqno_admin_auth', 'true');
-      } catch {}
-    } else {
-      setPinError('Incorrect Master PIN. Use 9949 to access.');
+      setEnteredPin('');
+      setLoginOtp('');
+      setChallengeToken('');
+      setGateMode('pin');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleResendLoginOtpClick = async () => {
+    if (loginOtpCooldown > 0 || authSubmitting) return;
+    setPinError(null);
+    setAuthSubmitting(true);
+    try {
+      const res = await resendAdminLoginOtp(challengeToken);
+      if (!res.success) {
+        if (res.retryAfterSec) setLoginOtpCooldown(res.retryAfterSec);
+        setPinError(res.message);
+        return;
+      }
+      setLoginOtpCooldown(30);
+      setLoginOtpInfo(
+        res.simulated && res.devOtp
+          ? `Simulation Mode: New code is ${res.devOtp}.`
+          : `New 6-digit login code sent to Owner Email (${res.maskedOwnerEmail || maskedOwnerEmail}).`
+      );
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleSendResetPinOtpClick = async () => {
+    if (resetOtpCooldown > 0 || authSubmitting) return;
+    setPinError(null);
+    setPinSuccess(null);
+    setAuthSubmitting(true);
+    try {
+      const res = await sendAdminPinResetOtp('reset_pin');
+      if (!res.success) {
+        if (res.retryAfterSec) setResetOtpCooldown(res.retryAfterSec);
+        setPinError(res.message);
+        return;
+      }
+      if (res.maskedOwnerEmail) setMaskedOwnerEmail(res.maskedOwnerEmail);
+      setResetOtpSent(true);
+      setResetOtpCooldown(30);
+      setResetOtpInfo(
+        res.simulated && res.devOtp
+          ? `Simulation Mode: Owner reset code is ${res.devOtp}.`
+          : `6-digit Owner verification code sent to ${res.maskedOwnerEmail || maskedOwnerEmail}. Check Gmail inbox.`
+      );
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleResetAdminPinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError(null);
+    setPinSuccess(null);
+
+    const cleanOtp = resetPinOtp.replace(/[^0-9]/g, '').trim();
+    const cleanNew = newAdminPin.replace(/[^0-9]/g, '').trim();
+    const cleanConfirm = confirmAdminPin.replace(/[^0-9]/g, '').trim();
+
+    if (cleanOtp.length !== 6) {
+      setPinError('Please enter the 6-digit verification code sent to Owner Email.');
+      return;
+    }
+    if (cleanNew.length < 4 || cleanNew.length > 8) {
+      setPinError('New Admin PIN must be 4 to 8 numeric digits.');
+      return;
+    }
+    if (cleanNew !== cleanConfirm) {
+      setPinError('New PIN and Confirm New PIN do not match.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const res = await resetAdminPinWithOtp({ otp: cleanOtp, newPin: cleanNew });
+      if (!res.success || !res.pinUpdated) {
+        setPinError(res.message || 'Could not reset Admin PIN.');
+        return;
+      }
+
+      setPinLocked(false);
+      setFailedAttempts(0);
+      setResetPinOtp('');
+      setNewAdminPin('');
+      setConfirmAdminPin('');
+      setResetOtpSent(false);
+      setResetOtpInfo('');
+      setEnteredPin('');
+      setGateMode('pin');
+      setPinSuccess('New Admin PIN saved & unlocked! Enter your new PIN below to sign in.');
+    } finally {
+      setAuthSubmitting(false);
     }
   };
 
   const handleLock = () => {
     setIsAuthenticated(false);
     setEnteredPin('');
-    try {
-      localStorage.removeItem('teqqno_admin_auth');
-    } catch {}
+    setLoginOtp('');
+    setChallengeToken('');
+    setPinError(null);
+    setPinSuccess(null);
+    setGateMode(pinLocked ? 'locked_reset' : 'pin');
+    clearStoredAdminToken();
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -912,16 +1154,28 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   );
 
   // =========================================================================
-  // PIN GATE SCREEN (Brand Navy #071B35 + Orange #FF7900 + White Card)
+  // SECURE ADMIN GATE (MASTER PIN + 2-STEP EMAIL OTP + 3-STRIKE LOCKOUT RESET)
   // =========================================================================
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#071B35] via-[#0B2547] to-[#071B35] flex flex-col justify-center items-center p-4">
-        <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-6 animate-admin-scale-in">
-          <div className="text-center space-y-3">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl space-y-5 animate-admin-scale-in">
+          <div className="text-center space-y-2.5">
             <div className="relative inline-flex items-center justify-center mx-auto">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#071B35] to-[#0D274A] border border-[#FF7900]/30 text-[#FF7900] flex items-center justify-center shadow-lg shadow-[#071B35]/20">
-                <Lock className="w-7 h-7" />
+              <div
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg ${
+                  gateMode === 'locked_reset' && pinLocked
+                    ? 'bg-red-600 text-white shadow-red-600/25'
+                    : 'bg-gradient-to-br from-[#071B35] to-[#0D274A] border border-[#FF7900]/30 text-[#FF7900] shadow-[#071B35]/20'
+                }`}
+              >
+                {gateMode === 'two_step' ? (
+                  <ShieldCheck className="w-7 h-7" />
+                ) : gateMode === 'locked_reset' ? (
+                  <KeyRound className="w-7 h-7" />
+                ) : (
+                  <Lock className="w-7 h-7" />
+                )}
               </div>
               <img
                 src={LOGO_BADGE_SRC}
@@ -929,55 +1183,322 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 className="w-7 h-7 rounded-lg object-contain bg-white border border-slate-200 shadow-sm p-0.5 -bottom-1.5 -right-1.5 absolute"
               />
             </div>
+
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF4EB] border border-[#FFD8B8] text-[11px] font-semibold text-[#FF7900]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#FF7900] animate-pulse" />
-              <span>Business Owner Access</span>
+              <span>
+                {gateMode === 'two_step'
+                  ? '2-Step Owner Email Verification'
+                  : gateMode === 'locked_reset' && pinLocked
+                  ? 'Security Lockout Activated'
+                  : 'Authorized Owner Access Only'}
+              </span>
             </div>
+
             <h1 className="font-display font-bold text-2xl tracking-tight text-[#071B35]">
-              TeqqnoWorld Operations Hub
+              {gateMode === 'two_step'
+                ? 'Verify Owner Login Code'
+                : gateMode === 'locked_reset' && pinLocked
+                ? 'Admin Panel Locked'
+                : gateMode === 'locked_reset'
+                ? 'Reset Admin Master PIN'
+                : 'TeqqnoWorld Operations Hub'}
             </h1>
+
             <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">
-              Enter your 4-digit security PIN to manage orders, Delhivery shipments, and Razorpay settlements.
+              {gateMode === 'two_step'
+                ? loginOtpInfo || `Enter the 6-digit code sent to Owner Email (${maskedOwnerEmail}).`
+                : gateMode === 'locked_reset' && pinLocked
+                ? '3 wrong PIN attempts detected. Owner must verify a 6-digit Gmail code and set a new Admin PIN to unlock.'
+                : gateMode === 'locked_reset'
+                ? `Verify a 6-digit code sent to Owner Email (${maskedOwnerEmail}) to create a new Admin PIN.`
+                : twoStepEnabled
+                ? 'Protected by Master PIN + 2-Step Owner Email Verification and 3-attempt auto lockout.'
+                : 'Protected by Master PIN and 3-attempt auto lockout.'}
             </p>
           </div>
 
-          <form onSubmit={handleUnlock} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 text-center">
-                Master Security PIN
-              </label>
-              <input
-                type="password"
-                maxLength={8}
-                autoFocus
-                placeholder="••••"
-                value={enteredPin}
-                onChange={(e) => setEnteredPin(e.target.value)}
-                className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none transition-colors placeholder:text-slate-300"
-              />
+          {checkingSession ? (
+            <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-slate-500">
+              <Loader2 className="w-6 h-6 text-[#FF7900] animate-spin" />
+              <span>Checking security status...</span>
             </div>
+          ) : (
+            <>
+              {pinSuccess && (
+                <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 py-2.5 px-3 rounded-xl flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <span>{pinSuccess}</span>
+                </div>
+              )}
 
-            {pinError && (
-              <div className="text-center text-xs text-red-700 bg-red-50 border border-red-200 py-2.5 px-3 rounded-xl flex items-center justify-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>{pinError}</span>
-              </div>
-            )}
+              {pinError && (
+                <div className="text-xs text-red-700 bg-red-50 border border-red-200 py-2.5 px-3 rounded-xl flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <span>{pinError}</span>
+                </div>
+              )}
 
-            <button
-              type="submit"
-              className="w-full bg-[#FF7900] hover:bg-[#e56d00] text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm min-h-[44px] shadow-md shadow-[#FF7900]/20"
-            >
-              <Unlock className="w-4 h-4" />
-              <span>Unlock Operations Hub</span>
-            </button>
-          </form>
+              {/* MODE 1: MASTER PIN ENTRY */}
+              {gateMode === 'pin' && (
+                <form onSubmit={handleUnlock} className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-slate-600">
+                        Master Security PIN
+                      </label>
+                      {failedAttempts > 0 && (
+                        <span className="text-[11px] font-bold text-red-600">
+                          {Math.max(0, 3 - failedAttempts)} / 3 tries left
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showEnteredPin ? 'text' : 'password'}
+                        inputMode="numeric"
+                        maxLength={8}
+                        autoFocus
+                        placeholder="••••"
+                        value={enteredPin}
+                        onChange={(e) => {
+                          setEnteredPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
+                          if (pinError) setPinError(null);
+                        }}
+                        className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3.5 px-10 bg-slate-50 border border-slate-200 rounded-xl text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none transition-colors placeholder:text-slate-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEnteredPin((v) => !v)}
+                        className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        aria-label="Toggle PIN visibility"
+                      >
+                        {showEnteredPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authSubmitting || !enteredPin}
+                    className="w-full bg-[#FF7900] hover:bg-[#e56d00] disabled:opacity-50 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm min-h-[44px] shadow-md shadow-[#FF7900]/20"
+                  >
+                    {authSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Verifying Security PIN...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Unlock className="w-4 h-4" />
+                        <span>{twoStepEnabled ? 'Verify PIN & Send Email Code' : 'Unlock Operations Hub'}</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              {/* MODE 2: 2-STEP OWNER EMAIL 6-DIGIT VERIFICATION */}
+              {gateMode === 'two_step' && (
+                <form onSubmit={handleVerifyLoginOtpSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 text-center">
+                      6-Digit Owner Email Code ({maskedOwnerEmail})
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      autoFocus
+                      placeholder="• • • • • •"
+                      value={loginOtp}
+                      onChange={(e) => {
+                        setLoginOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                        if (pinError) setPinError(null);
+                      }}
+                      className="w-full text-center tracking-[0.45em] text-2xl font-mono font-bold py-3.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none transition-colors placeholder:text-slate-300"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authSubmitting || loginOtp.length !== 6}
+                    className="w-full bg-[#FF7900] hover:bg-[#e56d00] disabled:opacity-50 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm min-h-[44px] shadow-md shadow-[#FF7900]/20"
+                  >
+                    {authSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Verifying 6-Digit Code...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>Verify Code &amp; Unlock Hub</span>
+                      </>
+                    )}
+                  </button>
+
+                  <div className="flex items-center justify-between text-xs pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGateMode('pin');
+                        setLoginOtp('');
+                        setPinError(null);
+                      }}
+                      className="text-slate-500 hover:text-[#071B35] underline cursor-pointer"
+                    >
+                      Back to PIN
+                    </button>
+                    <button
+                      type="button"
+                      disabled={loginOtpCooldown > 0 || authSubmitting}
+                      onClick={handleResendLoginOtpClick}
+                      className="font-semibold text-[#FF7900] hover:underline disabled:text-slate-400 cursor-pointer"
+                    >
+                      {loginOtpCooldown > 0 ? `Resend in ${loginOtpCooldown}s` : 'Resend 6-Digit Code'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* MODE 3: LOCKED AFTER 3 WRONG PINS OR FORGOT PIN -> OWNER EMAIL OTP + NEW PIN */}
+              {gateMode === 'locked_reset' && (
+                <div className="space-y-4">
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#071B35]">
+                      <Mail className="w-4 h-4 text-[#FF7900] shrink-0" />
+                      <span>Step 1: Send Owner Verification Code</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      {resetOtpInfo ||
+                        `A 6-digit verification code will be emailed exclusively to Owner Email (${maskedOwnerEmail}).`}
+                    </p>
+                    <button
+                      type="button"
+                      disabled={authSubmitting || resetOtpCooldown > 0}
+                      onClick={handleSendResetPinOtpClick}
+                      className="w-full py-2.5 px-3 rounded-xl bg-[#071B35] hover:bg-[#0D274A] disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Mail className="w-3.5 h-3.5 text-[#FF7900]" />
+                      <span>
+                        {resetOtpCooldown > 0
+                          ? `Resend Code in ${resetOtpCooldown}s`
+                          : resetOtpSent
+                          ? 'Resend 6-Digit Owner Code'
+                          : 'Send 6-Digit Code to Owner Email'}
+                      </span>
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleResetAdminPinSubmit} className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                        6-Digit Owner Email Code *
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="• • • • • •"
+                        value={resetPinOtp}
+                        onChange={(e) => {
+                          setResetPinOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                          if (pinError) setPinError(null);
+                        }}
+                        required
+                        className="w-full text-center tracking-[0.35em] text-lg font-mono font-bold py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                          New PIN (4–8 Digits) *
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={8}
+                          placeholder="e.g. 682491"
+                          value={newAdminPin}
+                          onChange={(e) => setNewAdminPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                          required
+                          className="w-full text-center font-mono py-2.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                          Confirm New PIN *
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={8}
+                          placeholder="Re-enter PIN"
+                          value={confirmAdminPin}
+                          onChange={(e) => setConfirmAdminPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                          required
+                          className="w-full text-center font-mono py-2.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-[#071B35] focus:border-[#FF7900] focus:bg-white outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={authSubmitting || resetPinOtp.length !== 6 || newAdminPin.length < 4}
+                      className="w-full bg-[#FF7900] hover:bg-[#e56d00] disabled:opacity-50 text-white font-semibold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer text-xs sm:text-sm"
+                    >
+                      {authSubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Verifying &amp; Saving New PIN...</span>
+                        </>
+                      ) : (
+                        <>
+                          <KeyRound className="w-4 h-4" />
+                          <span>Verify Code &amp; Save New Admin PIN</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              )}
+            </>
+          )}
 
           <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span className="font-mono tabular-nums">
-              Default PIN: <strong className="text-[#071B35]">9949</strong>
-            </span>
+            {gateMode === 'pin' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setGateMode('locked_reset');
+                  setPinError(null);
+                  setPinSuccess(null);
+                }}
+                className="text-slate-600 hover:text-[#FF7900] font-semibold hover:underline cursor-pointer"
+              >
+                Forgot / Reset PIN?
+              </button>
+            ) : gateMode === 'locked_reset' && !pinLocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setGateMode('pin');
+                  setPinError(null);
+                }}
+                className="text-slate-600 hover:text-[#071B35] font-semibold hover:underline cursor-pointer"
+              >
+                ← Back to PIN Login
+              </button>
+            ) : (
+              <span className="text-[11px] font-semibold text-red-600">
+                Owner Email Verification Required
+              </span>
+            )}
             <button
+              type="button"
               onClick={onBackToStore}
               className="text-[#FF7900] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
             >
@@ -1052,6 +1573,12 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       subtitle: 'Hostinger SMTP, Razorpay Live Gateway, Delhivery One, and Supabase PostgreSQL.',
       breadcrumb: 'Integrations & Setup',
       icon: Layers,
+    },
+    security: {
+      title: 'Admin Security & 2FA',
+      subtitle: 'Change Admin Master PIN, toggle 2-Step Owner Email Verification, and review security logs.',
+      breadcrumb: 'Security & 2FA',
+      icon: ShieldCheck,
     },
   };
 
@@ -1346,6 +1873,27 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* 8. Admin Security & 2-Step Verification */}
+        <button
+          onClick={() => {
+            setActiveSection('security');
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium transition-all duration-200 cursor-pointer ${
+            activeSection === 'security'
+              ? 'bg-[#FF7900] text-white font-semibold shadow-md shadow-[#FF7900]/25'
+              : 'text-slate-300 hover:text-white hover:bg-white/[0.06]'
+          }`}
+        >
+          <span className="flex items-center gap-3">
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            <span>Security &amp; 2FA</span>
+          </span>
+          <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
+            PIN
+          </span>
+        </button>
       </nav>
 
       {/* Bottom Promo Card (matching reference aesthetic) */}
@@ -1609,6 +2157,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               { id: 'marketing', label: 'Marketing' },
               { id: 'analytics', label: 'Analytics' },
               { id: 'integrations', label: 'Setup' },
+              { id: 'security', label: 'Security & 2FA' },
             ] as Array<{ id: AdminSection; label: string }>
           ).map((item) => (
             <button
@@ -2636,6 +3185,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 }
               }}
               onOpenDispatchTab={() => setActiveSection('dispatch')}
+            />
+          )}
+
+          {activeSection === 'security' && (
+            <AdminSecurityPanel
+              onToast={showToast}
+              onSessionExpired={handleLock}
             />
           )}
         </main>
