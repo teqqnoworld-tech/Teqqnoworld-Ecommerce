@@ -47,9 +47,10 @@ import { PaymentPolicyView } from './components/legal/PaymentPolicyView';
 import { PricingTaxesView } from './components/legal/PricingTaxesView';
 import { CookiePolicyView } from './components/legal/CookiePolicyView';
 
-import { PRODUCTS, INITIAL_MOCK_ORDER, DEFAULT_USER_PROFILE } from './data/mockData';
+import { PRODUCTS } from './data/mockData';
 import { calculateProductPrice } from './data/pricingRules';
 import { Product, ProductCategory, CartItem, Order, CustomArtwork, PrintMethod, UserProfile } from './types';
+import { doesOrderBelongToUser, isLegacyMockOrder } from './components/customer/customerUtils';
 import { ShieldCheck, Sparkles, Home, LayoutGrid, ShoppingBag, Package } from 'lucide-react';
 import { WhatsAppIcon } from './components/WhatsAppIcon';
 
@@ -126,7 +127,7 @@ export default function App() {
   const [catalogCategory, setCatalogCategory] = useState<ProductCategory>('all');
   const [customizerProductId, setCustomizerProductId] = useState<string>('prod-polo-01');
 
-  // Authentication State (Persisted in localStorage)
+  // Authentication State (Persisted in localStorage; fresh visitors start logged out)
   const [user, setUser] = useState<UserProfile | null>(() => {
     try {
       const saved = localStorage.getItem('teqqno_user');
@@ -134,7 +135,7 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
-    return DEFAULT_USER_PROFILE; // Default active session for immediate exploration
+    return null;
   });
 
   // Overlays
@@ -166,65 +167,51 @@ export default function App() {
   const [isDeliveryCheckOpen, setIsDeliveryCheckOpen] = useState<boolean>(false);
 
 
-  // Cart State (Persisted in localStorage)
+  // Cart State (Persisted in localStorage; clean empty cart for new visitors)
   const [cartItems, setCartItems] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem('teqqno_cart');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: CartItem[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((item) => item?.id !== 'initial-sample-polo');
+        }
+      }
     } catch (e) {
       console.error(e);
     }
-    return [
-      {
-        id: 'initial-sample-polo',
-        product: PRODUCTS[0],
-        color: PRODUCTS[0].colors[0],
-        size: 'L',
-        quantity: 2,
-        unitPrice: 499,
-        totalPrice: 998,
-        printMethod: 'Precision Embroidery',
-        printPlacement: 'Left Chest',
-        artwork: {
-          type: 'preset',
-          presetId: 'your-logo',
-          text: 'YOUR LOGO HERE',
-          x: 0,
-          y: 0,
-          scale: 1,
-          rotation: 0
-        }
-      }
-    ];
+    return [];
   });
 
-  // Orders State (Persisted in localStorage)
+  // Orders State (Persisted in localStorage; never pre-seeded with fake mock orders)
   const [orders, setOrders] = useState<Order[]>(() => {
     try {
       const saved = localStorage.getItem('teqqno_orders');
       if (saved) {
         const parsed: Order[] = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((o) => ({
-            ...o,
-            courierPartner:
-              o.courierPartner && /bluedart|blue\s*dart/i.test(o.courierPartner)
-                ? 'Delhivery Express'
-                : o.courierPartner,
-            trackingNumber:
-              o.trackingNumber === 'BD-AIR-8920194812'
-                ? 'DLV-EXP-8920194812'
-                : o.trackingNumber,
-          }));
+          return parsed
+            .filter((o) => !isLegacyMockOrder(o))
+            .map((o) => ({
+              ...o,
+              courierPartner:
+                o.courierPartner && /bluedart|blue\s*dart/i.test(o.courierPartner)
+                  ? 'Delhivery Express'
+                  : o.courierPartner,
+              trackingNumber:
+                o.trackingNumber === 'BD-AIR-8920194812'
+                  ? 'DLV-EXP-8920194812'
+                  : o.trackingNumber,
+            }));
         }
       }
     } catch (e) {
       console.error(e);
     }
-    return [INITIAL_MOCK_ORDER];
+    return [];
   });
 
-  const [activeOrder, setActiveOrder] = useState<Order>(orders[0]);
+  const [activeOrder, setActiveOrder] = useState<Order | null>(() => orders[0] || null);
 
   // Sync to localStorage
   useEffect(() => {
@@ -575,18 +562,22 @@ export default function App() {
   // Auth Handlers
   const handleLoginSuccess = (loggedInUser: UserProfile) => {
     setUser(loggedInUser);
+    const matchingOrders = orders.filter((o) => doesOrderBelongToUser(o, loggedInUser));
+    setActiveOrder(matchingOrders[0] || null);
     try {
       localStorage.setItem('teqqno_user', JSON.stringify(loggedInUser));
+      localStorage.setItem(`teqqno_user_profile_${loggedInUser.id}`, JSON.stringify(loggedInUser));
     } catch (e) {
       console.error(e);
     }
-    if (currentTab === 'home') {
+    if (currentTab === 'home' || currentTab === 'orders') {
       setCurrentTab('dashboard');
     }
   };
 
   const handleLogout = () => {
     setUser(null);
+    setActiveOrder(null);
     try {
       localStorage.removeItem('teqqno_user');
     } catch (e) {
@@ -624,6 +615,9 @@ export default function App() {
   const wishlistProducts = PRODUCTS.filter(p => wishlistIds.includes(p.id));
   const totalCartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
   const totalCartPrice = cartItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const userScopedOrders = user
+    ? orders.filter((o) => doesOrderBelongToUser(o, user))
+    : orders.filter((o) => !isLegacyMockOrder(o));
 
   if (currentTab === 'admin') {
     return (
@@ -826,12 +820,38 @@ export default function App() {
 
         {/* VIEW G: ORDER TRACKING & DIGITAL PROOF CONFIRMATION */}
         {currentTab === 'orders' && (
-          <OrderConfirmationView
-            order={activeOrder}
-            onUpdateOrder={handleUpdateOrder}
-            onBackToHome={() => setCurrentTab('home')}
-            onNavigateCatalog={() => setCurrentTab('catalog')}
-          />
+          activeOrder ? (
+            <OrderConfirmationView
+              order={activeOrder}
+              onUpdateOrder={handleUpdateOrder}
+              onBackToHome={() => setCurrentTab('home')}
+              onNavigateCatalog={() => setCurrentTab('catalog')}
+            />
+          ) : (
+            <div className="py-20 px-4 text-center max-w-md mx-auto space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#FF7A00]/10 text-[#FF7A00] mx-auto flex items-center justify-center">
+                <Package className="w-8 h-8" />
+              </div>
+              <h2 className="text-xl font-bold font-display text-zinc-900">No Active Order Yet</h2>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                You haven&apos;t placed an order yet. Customize your product with your logo or track an existing order using your Order ID.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                <button
+                  onClick={() => setCurrentTab('catalog')}
+                  className="bg-[#FF7A00] hover:bg-[#ff881a] text-white text-xs font-semibold px-5 py-3 rounded-xl shadow-md transition-all cursor-pointer"
+                >
+                  Explore Products
+                </button>
+                <button
+                  onClick={() => setIsTrackingModalOpen(true)}
+                  className="bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-semibold px-5 py-3 rounded-xl transition-all cursor-pointer"
+                >
+                  Track Order by ID
+                </button>
+              </div>
+            </div>
+          )
         )}
 
         {/* VIEW G2: WHATSAPP ORDER CONFIRM / CANCEL ACTION PAGE */}
@@ -877,11 +897,12 @@ export default function App() {
           user ? (
             <CustomerDashboard
               user={user}
-              orders={orders}
+              orders={userScopedOrders}
               onUpdateUser={(updated) => {
                 setUser(updated);
                 try {
                   localStorage.setItem('teqqno_user', JSON.stringify(updated));
+                  localStorage.setItem(`teqqno_user_profile_${updated.id}`, JSON.stringify(updated));
                 } catch (e) {
                   console.error(e);
                 }
@@ -1014,7 +1035,7 @@ export default function App() {
       <AccountModal
         isOpen={isAccountOpen}
         onClose={() => setIsAccountOpen(false)}
-        orders={orders}
+        orders={userScopedOrders}
         onSelectOrder={(order) => {
           setActiveOrder(order);
           setCurrentTab('orders');
@@ -1061,7 +1082,7 @@ export default function App() {
       <OrderTrackingModal
         isOpen={isTrackingModalOpen}
         onClose={() => setIsTrackingModalOpen(false)}
-        orders={orders}
+        orders={userScopedOrders}
         onSelectProof={(order) => {
           setActiveOrder(order);
           setCurrentTab('orders');

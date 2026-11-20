@@ -150,13 +150,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   };
 
   useEffect(() => {
+    setSupabaseOrders([]);
     syncLiveOrders();
-  }, [user.email, user.mobile]);
+  }, [user.id, user.email, user.mobile]);
 
-  // Merged real orders (local React state + live Supabase rows)
+  // Merged real orders (local React state + live Supabase rows, strictly scoped to this customer)
   const mergedOrders = useMemo(
-    () => mergeCustomerOrders(propOrders, supabaseOrders),
-    [propOrders, supabaseOrders]
+    () => mergeCustomerOrders(propOrders, supabaseOrders, user),
+    [propOrders, supabaseOrders, user]
   );
 
   // Toast feedback system (never uses window.alert)
@@ -212,6 +213,16 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
   useEffect(() => {
     try {
+      const saved = localStorage.getItem(brandStorageKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      setUploadedAssets(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setUploadedAssets([]);
+    }
+  }, [brandStorageKey]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(brandStorageKey, JSON.stringify(uploadedAssets));
     } catch {
       // ignore
@@ -245,6 +256,16 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
   useEffect(() => {
     try {
+      const saved = localStorage.getItem(rfqStorageKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      setCustomerRfqs(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setCustomerRfqs([]);
+    }
+  }, [rfqStorageKey]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(rfqStorageKey, JSON.stringify(customerRfqs));
     } catch {
       // ignore
@@ -264,6 +285,17 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       return [];
     }
   });
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(notifReadKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      setReadNotifIds(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setReadNotifIds([]);
+    }
+  }, [notifReadKey]);
+
   const [notifPopoverOpen, setNotifPopoverOpen] = useState(false);
 
   const notifications = useMemo(
@@ -1146,7 +1178,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   subtitle="Logos & order-ready artworks"
                   theme="violet"
                   icon={<Layers className="w-5 h-5" />}
-                  sparkPoints={[1, 2, Math.max(1, brandAssetsCount)]}
+                  sparkPoints={brandAssetsCount > 0 ? [1, 2, brandAssetsCount] : [0, 0, 0]}
                   onClick={() => goToTab('brand-assets')}
                 />
               </section>

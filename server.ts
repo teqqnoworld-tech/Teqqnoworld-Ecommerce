@@ -822,6 +822,283 @@ app.post('/api/test-email', async (req: Request, res: Response) => {
   }
 });
 
+// New Customer Registration Welcome (Customer) + Full Details Alert (Admin)
+app.post('/api/send-registration-email', async (req: Request, res: Response) => {
+  try {
+    const {
+      userId,
+      firstName,
+      lastName,
+      fullName,
+      email,
+      phone,
+      company,
+      accountType,
+      registeredAt,
+      originUrl,
+    } = req.body || {};
+
+    const cleanEmail = String(email || '').trim();
+    const cleanName = String(fullName || `${firstName || ''} ${lastName || ''}`.trim() || 'Valued Customer').trim();
+    const cleanPhone = String(phone || '').trim();
+    const cleanCompany = String(company || '').trim();
+    const cleanAccountType = cleanCompany ? 'Business / Corporate' : (accountType === 'business' ? 'Business / Corporate' : 'Individual');
+    const cleanUserId = String(userId || `USR-${Date.now().toString().slice(-6)}`).trim();
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid customer email address is required.',
+      });
+    }
+
+    const cfg = getSmtpConfig();
+    const transporter = getSmtpTransporter();
+    const siteOrigin = (
+      cfg.smtpUser && process.env.APP_BASE_URL
+        ? process.env.APP_BASE_URL.trim().replace(/\/$/, '')
+        : originUrl && (String(originUrl).startsWith('http://') || String(originUrl).startsWith('https://'))
+        ? String(originUrl).replace(/\/$/, '')
+        : 'https://teqqnoworld.com'
+    );
+
+    const formattedTimeIst = new Date(registeredAt || Date.now()).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+
+    const waDigits = cleanPhone.replace(/[^0-9]/g, '');
+    const waNumber = waDigits.length === 10 ? `91${waDigits}` : waDigits;
+
+    if (!transporter) {
+      console.log('[Registration Email - Simulation Mode]', {
+        cleanName,
+        cleanEmail,
+        cleanPhone,
+        cleanCompany,
+        adminRecipients: cfg.adminEmailList,
+      });
+      return res.status(200).json({
+        success: true,
+        simulated: true,
+        customerSent: false,
+        adminSent: false,
+        recipient: cleanEmail,
+        adminRecipients: cfg.adminEmailList,
+        message: 'Registration emails prepared in Simulation Mode (configure HOSTINGER_SMTP_EMAIL & HOSTINGER_SMTP_PASSWORD in .env for live delivery).',
+      });
+    }
+
+    const customerHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#0F1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#FFFFFF;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#0F1117;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background-color:#161922;border-radius:16px;overflow:hidden;border:1px solid #262A36;">
+          <tr>
+            <td style="background:linear-gradient(135deg,#071B35 0%,#0E294D 100%);padding:28px 32px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:24px;font-weight:800;letter-spacing:-0.4px;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:#94A3B8;margin-top:4px;">
+                Custom Corporate Printing &amp; Branded Merchandise
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <div style="display:inline-block;background:#10B9811A;border:1px solid #10B98155;color:#34D399;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;margin-bottom:16px;">
+                ✓ ACCOUNT SUCCESSFULLY CREATED
+              </div>
+              <h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.3;color:#FFFFFF;">
+                Welcome to TeqqnoWorld, ${escapeHtml(cleanName)}!
+              </h1>
+              <p style="margin:0 0 22px 0;font-size:14px;line-height:1.65;color:#CBD5E1;">
+                Aapka TeqqnoWorld account successfully create ho gaya hai. Ab aap custom corporate polo t-shirts, mugs, visiting cards, standees aur welcome kits par apna logo preview karke seedha order kar sakte hain.
+              </p>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0F131C;border:1px solid #262C3D;border-radius:12px;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:18px 20px;">
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#FF7900;margin-bottom:12px;">
+                      Your Account Details
+                    </div>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:13px;color:#E2E8F0;">
+                      <tr>
+                        <td style="padding:6px 0;color:#94A3B8;width:38%;">Full Name</td>
+                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanName)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 0;color:#94A3B8;">Registered Email</td>
+                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanEmail)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:6px 0;color:#94A3B8;">Mobile Number</td>
+                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanPhone || '—')}</td>
+                      </tr>
+                      ${cleanCompany ? `<tr>
+                        <td style="padding:6px 0;color:#94A3B8;">Company</td>
+                        <td style="padding:6px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanCompany)}</td>
+                      </tr>` : ''}
+                      <tr>
+                        <td style="padding:6px 0;color:#94A3B8;">Registered On</td>
+                        <td style="padding:6px 0;color:#CBD5E1;">${escapeHtml(formattedTimeIst)} IST</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="text-align:center;margin:26px 0 18px;">
+                <a href="${escapeHtml(siteOrigin)}/#dashboard" style="display:inline-block;background:#FF7900;color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:700;padding:13px 28px;border-radius:10px;">
+                  Open My TeqqnoWorld Dashboard →
+                </a>
+              </div>
+
+              <p style="margin:18px 0 0 0;font-size:12px;line-height:1.6;color:#94A3B8;text-align:center;">
+                Need help with custom printing, bulk quotes, or samples? Reply to this email or WhatsApp our print team anytime.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#0D1018;padding:18px 32px;border-top:1px solid #232837;text-align:center;font-size:11px;color:#64748B;">
+              © ${new Date().getFullYear()} TeqqnoWorld • Printing · Branding · Solutions • Hyderabad, India
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const adminHtml = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /></head>
+<body style="margin:0;padding:0;background-color:#0F1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#FFFFFF;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#0F1117;padding:24px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background-color:#161922;border-radius:16px;overflow:hidden;border:1px solid #FF790066;">
+          <tr>
+            <td style="background:#071B35;padding:22px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#FF7900;">
+                NEW CUSTOMER REGISTRATION ALERT
+              </div>
+              <h2 style="margin:6px 0 0 0;font-size:20px;color:#FFFFFF;">
+                ${escapeHtml(cleanName)} joined TeqqnoWorld
+              </h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:26px 28px;">
+              <p style="margin:0 0 18px 0;font-size:13px;color:#CBD5E1;line-height:1.6;">
+                A new customer has registered an account on the TeqqnoWorld storefront. Complete customer details are below:
+              </p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0F131C;border:1px solid #262C3D;border-radius:12px;margin-bottom:20px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:13px;color:#E2E8F0;">
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;width:36%;">Customer Name</td>
+                        <td style="padding:7px 0;font-weight:700;color:#FFFFFF;">${escapeHtml(cleanName)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">Email Address</td>
+                        <td style="padding:7px 0;"><a href="mailto:${escapeHtml(cleanEmail)}" style="color:#60A5FA;text-decoration:none;font-weight:600;">${escapeHtml(cleanEmail)}</a></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">Mobile / WhatsApp</td>
+                        <td style="padding:7px 0;font-weight:700;color:#34D399;">${escapeHtml(cleanPhone || 'Not provided')}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">Company / Brand</td>
+                        <td style="padding:7px 0;font-weight:600;color:#FFFFFF;">${escapeHtml(cleanCompany || 'Individual Customer')}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">Account Type</td>
+                        <td style="padding:7px 0;color:#FBBF24;font-weight:600;">${escapeHtml(cleanAccountType)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">User ID</td>
+                        <td style="padding:7px 0;font-family:monospace;font-size:12px;color:#CBD5E1;">${escapeHtml(cleanUserId)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0;color:#94A3B8;">Registered At</td>
+                        <td style="padding:7px 0;color:#CBD5E1;">${escapeHtml(formattedTimeIst)} IST</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="text-align:center;">
+                ${waNumber ? `<a href="https://wa.me/${escapeHtml(waNumber)}" style="display:inline-block;background:#1EBE5D;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:700;padding:11px 20px;border-radius:10px;margin:4px;">WhatsApp Customer</a>` : ''}
+                <a href="mailto:${escapeHtml(cleanEmail)}" style="display:inline-block;background:#FF7900;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:700;padding:11px 20px;border-radius:10px;margin:4px;">Email Customer</a>
+                <a href="${escapeHtml(siteOrigin)}/#admin" style="display:inline-block;background:#1E293B;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:700;padding:11px 20px;border-radius:10px;margin:4px;border:1px solid #334155;">Open Admin Hub</a>
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const [customerResult, adminResult] = await Promise.allSettled([
+      transporter.sendMail({
+        from: `"TeqqnoWorld" <${cfg.smtpUser}>`,
+        to: cleanEmail,
+        replyTo: cfg.primaryAdminEmail,
+        subject: `Welcome to TeqqnoWorld, ${cleanName}! Account Created Successfully`,
+        html: customerHtml,
+      }),
+      transporter.sendMail({
+        from: `"TeqqnoWorld Registrations" <${cfg.smtpUser}>`,
+        to: cfg.adminEmailList.join(', '),
+        replyTo: cleanEmail,
+        subject: `[New Customer Signup] ${cleanName}${cleanCompany ? ` (${cleanCompany})` : ''} — ${cleanPhone || cleanEmail}`,
+        html: adminHtml,
+      }),
+    ]);
+
+    const customerSent = customerResult.status === 'fulfilled';
+    const adminSent = adminResult.status === 'fulfilled';
+
+    if (!customerSent) {
+      console.error('[Registration Email - Customer Failed]:', (customerResult as PromiseRejectedResult).reason);
+    }
+    if (!adminSent) {
+      console.error('[Registration Email - Admin Failed]:', (adminResult as PromiseRejectedResult).reason);
+    }
+
+    return res.status(customerSent || adminSent ? 200 : 500).json({
+      success: customerSent || adminSent,
+      customerSent,
+      adminSent,
+      recipient: cleanEmail,
+      adminRecipients: cfg.adminEmailList,
+      messageId: customerSent ? customerResult.value.messageId : undefined,
+      adminMessageId: adminSent ? adminResult.value.messageId : undefined,
+      message: `Registration emails dispatched (Customer: ${customerSent ? 'Sent' : 'Failed'}, Admin: ${adminSent ? 'Sent' : 'Failed'}).`,
+    });
+  } catch (err: any) {
+    console.error('[Registration Email Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to send registration emails.',
+    });
+  }
+});
+
 // Health check / SMTP status endpoint
 app.get('/api/smtp-status', (_req: Request, res: Response) => {
   const cfg = getSmtpConfig();

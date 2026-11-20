@@ -232,16 +232,52 @@ export function mapSupabaseRowToOrder(row: CustomOrderRow): Order {
 }
 
 /**
+ * Returns true if the given Order is the legacy demo/mock order that should never pollute real customer portals.
+ */
+export function isLegacyMockOrder(order: Order): boolean {
+  return order.id === 'order-tq-98104' || order.orderNumber?.toUpperCase() === 'TQ-98104';
+}
+
+/**
+ * Checks whether an order belongs to the currently authenticated customer
+ * based on normalized email or last 10 digits of phone number.
+ */
+export function doesOrderBelongToUser(order: Order, user?: UserProfile | null): boolean {
+  if (!user) return false;
+  if (isLegacyMockOrder(order)) return false;
+
+  const userEmail = (user.email || '').trim().toLowerCase();
+  const orderEmail = (order.shippingAddress?.email || '').trim().toLowerCase();
+  if (userEmail && orderEmail && userEmail === orderEmail) {
+    return true;
+  }
+
+  const userDigits = (user.mobile || '').replace(/[^0-9]/g, '').slice(-10);
+  const orderDigits = (order.shippingAddress?.phone || '').replace(/[^0-9]/g, '').slice(-10);
+  if (userDigits.length === 10 && orderDigits.length === 10 && userDigits === orderDigits) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Merges local React/localStorage orders with live Supabase custom_orders rows
  * so status, courier partner, and AWB updates from Admin reflect immediately.
+ * Strictly isolates orders to the currently logged-in customer.
  */
 export function mergeCustomerOrders(
   localOrders: Order[],
-  supabaseRows: CustomOrderRow[]
+  supabaseRows: CustomOrderRow[],
+  user?: UserProfile | null
 ): Order[] {
   const byRef = new Map<string, Order>();
 
-  localOrders.forEach((order) => {
+  const scopedLocalOrders = user
+    ? localOrders.filter((order) => doesOrderBelongToUser(order, user))
+    : localOrders.filter((order) => !isLegacyMockOrder(order));
+
+  scopedLocalOrders.forEach((order) => {
     const key = order.orderNumber.toUpperCase();
     byRef.set(key, order);
   });

@@ -161,6 +161,55 @@ export async function sendTestEmail(toEmail?: string): Promise<EmailResponse> {
   }
 }
 
+export interface RegistrationEmailPayload {
+  userId?: string;
+  firstName?: string;
+  lastName?: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  company?: string;
+  accountType?: 'individual' | 'business';
+  registeredAt?: string;
+}
+
+/**
+ * Dispatches welcome confirmation email to newly registered customer
+ * and full registration details alert to Admin via Hostinger SMTP.
+ */
+export async function sendRegistrationEmails(
+  payload: RegistrationEmailPayload
+): Promise<EmailResponse> {
+  try {
+    const originUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const response = await fetch('/api/send-registration-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      keepalive: true,
+      body: JSON.stringify({ ...payload, originUrl }),
+    });
+
+    const data = await safeParseJson<EmailResponse>(response);
+    if (!data) {
+      return {
+        success: false,
+        backendUnavailable: true,
+        message: `Registration email API returned HTTP ${response.status}.`,
+      };
+    }
+    return data;
+  } catch (error: any) {
+    console.warn('[Hostinger SMTP Service] Registration email error:', error);
+    return {
+      success: false,
+      backendUnavailable: true,
+      message: error?.message || 'Network error calling /api/send-registration-email.',
+    };
+  }
+}
+
 /**
  * Checks the status and configuration of Hostinger SMTP on the backend.
  */

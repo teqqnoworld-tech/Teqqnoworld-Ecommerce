@@ -18,6 +18,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../types';
 import { DEFAULT_USER_PROFILE } from '../data/mockData';
+import { sendRegistrationEmails } from '../services/emailService';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -118,25 +119,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      // Build UserProfile object
+      // Build clean UserProfile object (restore only this user's own saved profile if cached locally)
       const authUser = data.user;
       const meta = authUser?.user_metadata || {};
+      const userId = authUser?.id || `user-${Date.now()}`;
       const fullName = meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || cleanEmail.split('@')[0];
-      
+
+      let cachedUserProfile: Partial<UserProfile> | null = null;
+      try {
+        const rawCached = localStorage.getItem(`teqqno_user_profile_${userId}`);
+        if (rawCached) cachedUserProfile = JSON.parse(rawCached);
+      } catch {
+        cachedUserProfile = null;
+      }
+
+      const resolvedCompany = cachedUserProfile?.companyName ?? (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
       const profile: UserProfile = {
-        id: authUser?.id || `user-${Date.now()}`,
-        name: fullName || 'Valued Partner',
+        id: userId,
+        name: cachedUserProfile?.name || fullName || 'Valued Customer',
         email: authUser?.email || cleanEmail,
-        mobile: meta.phone || '+91 98765 43210',
-        companyName: meta.company || 'Enterprise Partner',
-        role: 'Corporate Admin',
+        mobile: cachedUserProfile?.mobile || meta.phone || '',
+        companyName: resolvedCompany || undefined,
+        gstin: cachedUserProfile?.gstin,
+        avatarUrl: cachedUserProfile?.avatarUrl,
+        accountType: cachedUserProfile?.accountType || (resolvedCompany ? 'business' : 'individual'),
+        role: resolvedCompany ? 'Corporate Admin' : 'Individual Shopper',
         isVerified: true,
-        createdAt: new Date().toISOString().split('T')[0],
-        savedAddresses: DEFAULT_USER_PROFILE.savedAddresses,
+        createdAt: cachedUserProfile?.createdAt || authUser?.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+        savedAddresses: Array.isArray(cachedUserProfile?.savedAddresses) ? cachedUserProfile.savedAddresses : [],
       };
 
       // Persist to local storage
       localStorage.setItem('teqqno_user', JSON.stringify(profile));
+      localStorage.setItem(`teqqno_user_profile_${profile.id}`, JSON.stringify(profile));
       onLoginSuccess(profile);
       onClose();
     } catch (err: any) {
@@ -212,40 +227,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       const authUser = data.user;
+      const trimmedCompany = companyName.trim();
+      const accountType: 'individual' | 'business' = trimmedCompany ? 'business' : 'individual';
+      const registeredIso = new Date().toISOString();
+
       const profile: UserProfile = {
         id: authUser?.id || `user-${Date.now()}`,
         name: fullName,
         email: trimmedEmail,
         mobile: fullPhone,
-        companyName: companyName.trim() || 'B2B Client',
-        role: 'Corporate Admin',
+        companyName: trimmedCompany || undefined,
+        accountType,
+        role: trimmedCompany ? 'Corporate Admin' : 'Individual Shopper',
         isVerified: true,
-        createdAt: new Date().toISOString().split('T')[0],
-        savedAddresses: [
-          {
-            id: `addr-${Date.now()}`,
-            title: 'Head Office',
-            fullName: fullName,
-            companyName: companyName.trim() || undefined,
-            phone: fullPhone,
-            street: 'Plot 42, Udyog Vihar Phase 4',
-            city: 'Gurugram',
-            state: 'Haryana',
-            pincode: '122016',
-            isDefault: true,
-            type: 'both'
-          }
-        ],
+        createdAt: registeredIso.split('T')[0],
+        savedAddresses: [],
       };
 
-      // Persist in localStorage
+      // Persist clean per-user profile in localStorage
       localStorage.setItem('teqqno_user', JSON.stringify(profile));
-      setRegSuccessMessage('Account created successfully! Logging you in...');
-      
+      localStorage.setItem(`teqqno_user_profile_${profile.id}`, JSON.stringify(profile));
+
+      // Dispatch registration confirmation email to customer + full details alert to Admin (non-blocking)
+      void sendRegistrationEmails({
+        userId: profile.id,
+        firstName: trimmedFirst,
+        lastName: trimmedLast,
+        fullName,
+        email: trimmedEmail,
+        phone: fullPhone,
+        company: trimmedCompany || undefined,
+        accountType,
+        registeredAt: registeredIso,
+      });
+
+      setRegSuccessMessage('Account created successfully! Welcome email sent to your inbox. Opening your dashboard...');
+
       setTimeout(() => {
         onLoginSuccess(profile);
         onClose();
-      }, 700);
+      }, 800);
 
     } catch (err: any) {
       console.error('Registration error:', err);

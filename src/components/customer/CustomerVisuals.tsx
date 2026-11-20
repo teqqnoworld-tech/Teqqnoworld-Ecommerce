@@ -60,10 +60,8 @@ export const PortalSparkline: React.FC<{
   strokeColor: string;
   id: string;
 }> = ({ points, strokeColor, id }) => {
-  const safePoints =
-    points.length >= 2 && points.some((p) => p > 0)
-      ? points
-      : [1, 1.4, 1.2, 1.8, 1.6, 2.2, 2.0];
+  const hasData = points.length >= 2 && points.some((p) => p > 0);
+  const safePoints = hasData ? points : [0, 0, 0, 0, 0];
 
   const width = 94;
   const height = 34;
