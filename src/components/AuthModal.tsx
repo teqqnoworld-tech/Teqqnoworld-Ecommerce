@@ -13,7 +13,8 @@ import {
   CheckCircle2, 
   AlertCircle,
   Sparkles,
-  KeyRound
+  KeyRound,
+  Smartphone
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../types';
@@ -26,6 +27,11 @@ import {
   verifyOtpAndResetPassword,
 } from '../services/emailService';
 import { evaluatePasswordStrength } from '../utils/passwordStrength';
+import {
+  customerLoginResendOtp,
+  customerLoginStep1,
+  customerLoginVerifyOtp,
+} from '../services/customerTwoStepService';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -50,6 +56,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+
+  // Login Step 2: Customer Two-Step Verification (Google Authenticator TOTP or Email OTP) state
+  const [loginStep, setLoginStep] = useState<'credentials' | 'two_step'>('credentials');
+  const [loginTwoStepMethod, setLoginTwoStepMethod] = useState<'totp' | 'email'>('email');
+  const [loginCanSwitchToEmail, setLoginCanSwitchToEmail] = useState(false);
+  const [loginChallengeToken, setLoginChallengeToken] = useState('');
+  const [loginTwoStepOtp, setLoginTwoStepOtp] = useState('');
+  const [loginTwoStepMaskedEmail, setLoginTwoStepMaskedEmail] = useState('');
+  const [loginTwoStepInfo, setLoginTwoStepInfo] = useState('');
+  const [loginTwoStepCooldown, setLoginTwoStepCooldown] = useState(0);
+  const [loginTwoStepResending, setLoginTwoStepResending] = useState(false);
+
+  // Continue with Google OAuth state
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   // Register form state
   const [firstName, setFirstName] = useState('');
@@ -89,6 +109,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     if (isOpen) {
       setTab(defaultTab);
       setLoginError('');
+      setLoginStep('credentials');
+      setLoginTwoStepMethod('email');
+      setLoginCanSwitchToEmail(false);
+      setLoginChallengeToken('');
+      setLoginTwoStepOtp('');
+      setLoginTwoStepMaskedEmail('');
+      setLoginTwoStepInfo('');
+      setLoginTwoStepCooldown(0);
+      setGoogleLoading(false);
       setRegError('');
       setRegSuccessMessage('');
       setRegStep('form');
@@ -106,6 +135,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }, [isOpen, defaultTab]);
 
+  // Cooldown timer for Resend OTP button (Login 2-Step Verification)
+  useEffect(() => {
+    if (loginTwoStepCooldown <= 0) return;
+    const t = setTimeout(() => setLoginTwoStepCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [loginTwoStepCooldown]);
+
   // Cooldown timer for Resend OTP button (Register)
   useEffect(() => {
     if (otpCooldown <= 0) return;
@@ -119,6 +155,85 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const t = setTimeout(() => setResetCooldown((c) => Math.max(0, c - 1)), 1000);
     return () => clearTimeout(t);
   }, [resetCooldown]);
+
+  // Listen for iframe-safe Google OAuth popup completion postMessage
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleGooglePopupMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const msg = event.data;
+      if (!msg || msg.type !== 'TEQQNO_GOOGLE_AUTH') return;
+
+      if (msg.error) {
+        setGoogleLoading(false);
+        const readableErr = String(msg.error).replace(/\+/g, ' ');
+        if (tab === 'register') setRegError(readableErr);
+        else setLoginError(readableErr);
+        return;
+      }
+
+      try {
+        setGoogleLoading(true);
+        let authUser: any = null;
+        let tokens: { access_token: string; refresh_token: string } | undefined;
+
+        if (msg.code) {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(String(msg.code));
+          if (error) throw error;
+          authUser = data.user || data.session?.user;
+          if (data.session?.access_token && data.session?.refresh_token) {
+            tokens = {
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            };
+          }
+        } else if (msg.access_token && msg.refresh_token) {
+          const { data, error } = await supabase.auth.setSession({
+            access_token: String(msg.access_token),
+            refresh_token: String(msg.refresh_token),
+          });
+          if (error) throw error;
+          authUser = data.user || data.session?.user;
+        }
+
+        if (!authUser) {
+          throw new Error('Google sign-in completed, but session could not be verified. Please try again.');
+        }
+
+        // Send welcome confirmation email once if this is a brand-new Google signup
+        const createdMs = authUser.created_at ? new Date(authUser.created_at).getTime() : 0;
+        const isBrandNewUser = createdMs > 0 && Date.now() - createdMs < 90 * 1000;
+        if (isBrandNewUser && authUser.email) {
+          const meta = authUser.user_metadata || {};
+          const gFullName =
+            meta.full_name || meta.name || String(authUser.email).split('@')[0] || 'Customer';
+          const parts = gFullName.trim().split(/\s+/);
+          sendRegistrationEmails({
+            userId: authUser.id,
+            firstName: parts[0] || gFullName,
+            lastName: parts.slice(1).join(' ') || '',
+            fullName: gFullName,
+            email: authUser.email,
+            phone: meta.phone || '',
+            accountType: 'individual',
+            registeredAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
+
+        await completeAuthenticatedLogin(authUser, tokens, authUser.email || '');
+      } catch (err: any) {
+        const errMsg = err?.message || 'Google Sign-In failed. Please try again.';
+        if (tab === 'register') setRegError(errMsg);
+        else setLoginError(errMsg);
+      } finally {
+        setGoogleLoading(false);
+      }
+    };
+
+    window.addEventListener('message', handleGooglePopupMessage);
+    return () => window.removeEventListener('message', handleGooglePopupMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, tab]);
 
   if (!isOpen) return null;
 
@@ -183,14 +298,154 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     );
   };
 
+  // Shared helper to finalize authenticated customer login after Step 1 (or Step 2 2FA)
+  const completeAuthenticatedLogin = async (
+    authUser: any,
+    sessionTokens: { access_token: string; refresh_token: string } | undefined,
+    fallbackEmail: string
+  ) => {
+    if (sessionTokens?.access_token && sessionTokens?.refresh_token) {
+      await supabase.auth.setSession({
+        access_token: sessionTokens.access_token,
+        refresh_token: sessionTokens.refresh_token,
+      });
+    }
+
+    const meta = authUser?.user_metadata || {};
+    const userId = authUser?.id || `user-${Date.now()}`;
+    const fullName =
+      meta.full_name ||
+      meta.name ||
+      `${meta.first_name || ''} ${meta.last_name || ''}`.trim() ||
+      fallbackEmail.split('@')[0];
+
+    let cachedUserProfile: Partial<UserProfile> | null = null;
+    try {
+      const rawCached = localStorage.getItem(`teqqno_user_profile_${userId}`);
+      if (rawCached) cachedUserProfile = JSON.parse(rawCached);
+    } catch {
+      cachedUserProfile = null;
+    }
+
+    const resolvedCompany =
+      cachedUserProfile?.companyName ??
+      (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
+    const profile: UserProfile = {
+      id: userId,
+      name: cachedUserProfile?.name || fullName || 'Valued Customer',
+      email: authUser?.email || fallbackEmail,
+      mobile: cachedUserProfile?.mobile || meta.phone || '',
+      companyName: resolvedCompany || undefined,
+      gstin: cachedUserProfile?.gstin,
+      avatarUrl: cachedUserProfile?.avatarUrl || meta.avatar_url || meta.picture || undefined,
+      accountType: cachedUserProfile?.accountType || (resolvedCompany ? 'business' : 'individual'),
+      role: resolvedCompany ? 'Corporate Admin' : 'Individual Shopper',
+      isVerified: true,
+      createdAt:
+        cachedUserProfile?.createdAt ||
+        authUser?.created_at?.split('T')[0] ||
+        new Date().toISOString().split('T')[0],
+      savedAddresses: Array.isArray(cachedUserProfile?.savedAddresses)
+        ? cachedUserProfile.savedAddresses
+        : [],
+    };
+
+    localStorage.setItem('teqqno_user', JSON.stringify(profile));
+    localStorage.setItem(`teqqno_user_profile_${profile.id}`, JSON.stringify(profile));
+    onLoginSuccess(profile);
+    onClose();
+  };
+
   // -------------------------------------------------------------
-  // LOGIN SUBMIT
+  // CONTINUE WITH GOOGLE (DIRECT SAME-TAB REDIRECT ON LIVE SITE; POPUP ONLY IN IFRAME)
+  // -------------------------------------------------------------
+  const handleContinueWithGoogle = async () => {
+    setLoginError('');
+    setRegError('');
+    setGoogleLoading(true);
+    try {
+      let isInIframe = false;
+      try {
+        isInIframe = window.self !== window.top;
+      } catch {
+        isInIframe = true;
+      }
+
+      const redirectTo = isInIframe
+        ? `${window.location.origin}/auth/google-callback`
+        : `${window.location.origin}/`;
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+          queryParams: {
+            prompt: 'select_account',
+          },
+        },
+      });
+
+      if (error || !data?.url) {
+        const rawMsg = error?.message || 'Google login is not enabled yet in Supabase.';
+        const friendly = rawMsg.toLowerCase().includes('provider is not enabled')
+          ? 'Google Sign-In needs to be enabled in Supabase Dashboard → Authentication → Providers → Google (add your free Google Client ID & Secret).'
+          : rawMsg;
+        if (tab === 'register') setRegError(friendly);
+        else setLoginError(friendly);
+        setGoogleLoading(false);
+        return;
+      }
+
+      // On normal standalone browser tabs (teqqnoworld.com, teqqnoworld-ecommerce.ai.studio, mobile),
+      // redirect the SAME main tab directly — no extra popup window!
+      if (!isInIframe) {
+        window.location.assign(data.url);
+        return;
+      }
+
+      // Inside embedded preview iframe: Google blocks iframes, so open in a centered popup
+      const width = 520;
+      const height = 640;
+      const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+      const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+      const popup = window.open(
+        data.url,
+        'teqqno_google_oauth',
+        `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+      );
+
+      if (!popup) {
+        const blockedMsg = 'Popup was blocked by your browser. Please allow popups for this site and click Continue with Google again.';
+        if (tab === 'register') setRegError(blockedMsg);
+        else setLoginError(blockedMsg);
+        setGoogleLoading(false);
+        return;
+      }
+
+      // Reset spinner if user closes the Google window manually
+      const pollClosed = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(pollClosed);
+          setGoogleLoading(false);
+        }
+      }, 600);
+    } catch (err: any) {
+      const msg = err?.message || 'Could not start Google Sign-In. Please try again.';
+      if (tab === 'register') setRegError(msg);
+      else setLoginError(msg);
+      setGoogleLoading(false);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // LOGIN STEP 1: CREDENTIALS CHECK (SERVER-GATED FOR 2FA)
   // -------------------------------------------------------------
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
 
-    const cleanEmail = loginEmail.trim();
+    const cleanEmail = loginEmail.trim().toLowerCase();
     if (!cleanEmail || !isValidEmail(cleanEmail)) {
       setLoginError('Please enter a valid business email address.');
       return;
@@ -201,67 +456,108 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     setLoginLoading(true);
-
     try {
-      // Supabase email-password signIn
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const res = await customerLoginStep1({
         email: cleanEmail,
         password: loginPassword,
       });
 
-      if (error) {
-        // Human friendly errors
-        if (error.message.includes('Invalid login credentials')) {
-          setLoginError('Invalid email or password. Please verify and try again.');
-        } else if (error.message.includes('Email not confirmed')) {
-          setLoginError('Please check your email inbox to confirm your account first.');
-        } else {
-          setLoginError(error.message);
-        }
-        setLoginLoading(false);
+      if (!res.success) {
+        setLoginError(res.message || 'Invalid email or password. Please verify and try again.');
         return;
       }
 
-      // Build clean UserProfile object (restore only this user's own saved profile if cached locally)
-      const authUser = data.user;
-      const meta = authUser?.user_metadata || {};
-      const userId = authUser?.id || `user-${Date.now()}`;
-      const fullName = meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || cleanEmail.split('@')[0];
-
-      let cachedUserProfile: Partial<UserProfile> | null = null;
-      try {
-        const rawCached = localStorage.getItem(`teqqno_user_profile_${userId}`);
-        if (rawCached) cachedUserProfile = JSON.parse(rawCached);
-      } catch {
-        cachedUserProfile = null;
+      if (res.requiresTwoStep && res.challengeToken) {
+        const method = res.method === 'totp' ? 'totp' : 'email';
+        setLoginChallengeToken(res.challengeToken);
+        setLoginTwoStepMethod(method);
+        setLoginCanSwitchToEmail(Boolean(res.canSwitchToEmail));
+        setLoginTwoStepMaskedEmail(res.maskedEmail || cleanEmail);
+        setLoginTwoStepOtp('');
+        setLoginTwoStepCooldown(method === 'email' ? 30 : 0);
+        setLoginTwoStepInfo(
+          method === 'totp'
+            ? 'Password verified! Open Google Authenticator on your phone and enter the 6-digit code for TeqqnoWorld.'
+            : res.simulated && res.devOtp
+            ? `Simulation Mode: Use 2-Step login code ${res.devOtp}.`
+            : `Password verified! Enter the 6-digit code sent to ${res.maskedEmail || cleanEmail}.`
+        );
+        setLoginStep('two_step');
+        return;
       }
 
-      const resolvedCompany = cachedUserProfile?.companyName ?? (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
-      const profile: UserProfile = {
-        id: userId,
-        name: cachedUserProfile?.name || fullName || 'Valued Customer',
-        email: authUser?.email || cleanEmail,
-        mobile: cachedUserProfile?.mobile || meta.phone || '',
-        companyName: resolvedCompany || undefined,
-        gstin: cachedUserProfile?.gstin,
-        avatarUrl: cachedUserProfile?.avatarUrl,
-        accountType: cachedUserProfile?.accountType || (resolvedCompany ? 'business' : 'individual'),
-        role: resolvedCompany ? 'Corporate Admin' : 'Individual Shopper',
-        isVerified: true,
-        createdAt: cachedUserProfile?.createdAt || authUser?.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-        savedAddresses: Array.isArray(cachedUserProfile?.savedAddresses) ? cachedUserProfile.savedAddresses : [],
-      };
-
-      // Persist to local storage
-      localStorage.setItem('teqqno_user', JSON.stringify(profile));
-      localStorage.setItem(`teqqno_user_profile_${profile.id}`, JSON.stringify(profile));
-      onLoginSuccess(profile);
-      onClose();
+      await completeAuthenticatedLogin(res.user, res.session, cleanEmail);
     } catch (err: any) {
       console.error('Login error:', err);
       setLoginError(err?.message || 'Failed to authenticate. Please check connection and try again.');
     } finally {
       setLoginLoading(false);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // LOGIN STEP 2: VERIFY 6-DIGIT EMAIL 2FA CODE
+  // -------------------------------------------------------------
+  const handleVerifyLoginTwoStep = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+
+    const cleanOtp = loginTwoStepOtp.replace(/[^0-9]/g, '').trim();
+    if (cleanOtp.length !== 6) {
+      setLoginError('Please enter the complete 6-digit code sent to your email.');
+      return;
+    }
+
+    setLoginLoading(true);
+    try {
+      const res = await customerLoginVerifyOtp({
+        challengeToken: loginChallengeToken,
+        otp: cleanOtp,
+      });
+
+      if (!res.success || !res.session) {
+        setLoginError(res.message || 'Incorrect or expired 6-digit verification code.');
+        if (res.expired) {
+          setLoginStep('credentials');
+          setLoginChallengeToken('');
+          setLoginTwoStepOtp('');
+        }
+        return;
+      }
+
+      await completeAuthenticatedLogin(res.user, res.session, loginEmail.trim().toLowerCase());
+    } catch (err: any) {
+      console.error('Login 2FA verify error:', err);
+      setLoginError(err?.message || 'Failed to verify login code. Please try again.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleResendLoginTwoStep = async () => {
+    if (loginTwoStepCooldown > 0 || loginTwoStepResending || !loginChallengeToken) return;
+    setLoginError('');
+    setLoginTwoStepResending(true);
+    try {
+      const res = await customerLoginResendOtp(loginChallengeToken);
+      if (!res.success) {
+        if (res.retryAfterSec) setLoginTwoStepCooldown(res.retryAfterSec);
+        setLoginError(res.message || 'Failed to resend login code.');
+        if (res.expired) {
+          setLoginStep('credentials');
+          setLoginChallengeToken('');
+        }
+        return;
+      }
+      setLoginTwoStepMethod('email');
+      setLoginTwoStepCooldown(30);
+      setLoginTwoStepInfo(
+        res.simulated && res.devOtp
+          ? `Simulation Mode: 2-Step Email code is ${res.devOtp}.`
+          : `6-digit verification code sent to ${res.maskedEmail || loginTwoStepMaskedEmail}.`
+      );
+    } finally {
+      setLoginTwoStepResending(false);
     }
   };
 
@@ -684,9 +980,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Modal Body */}
         <div className="p-6 max-h-[75vh] overflow-y-auto">
           {/* ======================================================== */}
-          {/* TAB 1: LOGIN FORM */}
+          {/* TAB 1: LOGIN FORM (STEP 1 CREDENTIALS + STEP 2 EMAIL 2FA) */}
           {/* ======================================================== */}
-          {tab === 'login' && (
+          {tab === 'login' && loginStep === 'credentials' && (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               {loginError && (
                 <div className="p-3 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 text-xs flex items-start gap-2.5">
@@ -754,7 +1050,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={loginLoading}
+                disabled={loginLoading || googleLoading}
                 className="w-full bg-[#FF7A00] hover:bg-[#E56E00] text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#FF7A00]/25 disabled:opacity-60 cursor-pointer mt-2"
               >
                 {loginLoading ? (
@@ -769,14 +1065,204 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </>
                 )}
               </button>
+
+              {/* OR Divider + Continue with Google */}
+              <div className="relative py-2">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-white/10" />
+                </div>
+                <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
+                  <span className="bg-[#091830] px-3 text-slate-400 font-semibold">or continue with</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={googleLoading || loginLoading}
+                onClick={handleContinueWithGoogle}
+                className="w-full bg-white hover:bg-slate-100 text-[#0B1530] font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2.5 transition-all shadow-sm border border-white/20 disabled:opacity-60 cursor-pointer text-sm"
+              >
+                {googleLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-[#0B1530]/30 border-t-[#0B1530] rounded-full animate-spin" />
+                    <span>Connecting to Google...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.79-.07-1.54-.19-2.27h-11.3v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z" />
+                      <path fill="#34A853" d="M12.255 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96h-3.98v3.09C3.515 21.3 7.565 24 12.255 24z" />
+                      <path fill="#FBBC05" d="M5.525 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62h-3.98a11.86 11.86 0 0 0 0 10.76l3.98-3.09z" />
+                      <path fill="#EA4335" d="M12.255 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C18.205 1.19 15.495 0 12.255 0c-4.69 0-8.74 2.7-10.71 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z" />
+                    </svg>
+                    <span>Continue with Google</span>
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          {/* TAB 1 - STEP 2: 2-STEP VERIFICATION (GOOGLE AUTHENTICATOR OR EMAIL OTP) */}
+          {tab === 'login' && loginStep === 'two_step' && (
+            <form onSubmit={handleVerifyLoginTwoStep} className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-[#0D213F] border border-[#FF7900]/35 text-xs text-slate-200 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-bold text-[#FF9E44]">
+                    {loginTwoStepMethod === 'totp' ? (
+                      <>
+                        <Smartphone className="w-4 h-4" />
+                        <span>Google Authenticator Verification</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>Two-Step Email Verification</span>
+                      </>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginStep('credentials');
+                      setLoginChallengeToken('');
+                      setLoginTwoStepOtp('');
+                      setLoginError('');
+                    }}
+                    className="text-[11px] text-slate-300 hover:text-white underline cursor-pointer"
+                  >
+                    Back
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  {loginTwoStepInfo ||
+                    (loginTwoStepMethod === 'totp'
+                      ? 'Open Google Authenticator on your phone and enter the 6-digit code for TeqqnoWorld.'
+                      : `Enter the 6-digit code sent to ${loginTwoStepMaskedEmail} to complete sign-in.`)}
+                </p>
+              </div>
+
+              {loginError && (
+                <div className="p-3 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 text-xs flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-zinc-300 uppercase tracking-wider text-center">
+                  {loginTwoStepMethod === 'totp'
+                    ? 'Enter 6-Digit Google Authenticator Code *'
+                    : 'Enter 6-Digit Email Code *'}
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={loginTwoStepOtp}
+                  onChange={(e) => {
+                    setLoginTwoStepOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                    if (loginError) setLoginError('');
+                  }}
+                  placeholder="• • • • • •"
+                  autoFocus
+                  required
+                  className="w-full bg-zinc-900/95 text-white text-center font-mono text-2xl font-bold tracking-[0.45em] py-3.5 px-4 rounded-2xl border-2 border-zinc-700 focus:border-[#FF7A00] focus:ring-2 focus:ring-[#FF7A00]/25 outline-none transition-all placeholder:text-zinc-600 placeholder:tracking-[0.35em]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loginLoading || loginTwoStepOtp.length !== 6}
+                className="w-full bg-[#FF7A00] hover:bg-[#E56E00] text-white font-semibold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#FF7A00]/25 disabled:opacity-50 cursor-pointer"
+              >
+                {loginLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Verifying 2-Step Code...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Verify Code &amp; Sign In</span>
+                  </>
+                )}
+              </button>
+
+              {loginTwoStepMethod === 'email' ? (
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <span className="text-zinc-400">Didn&apos;t receive the code?</span>
+                  <button
+                    type="button"
+                    disabled={loginTwoStepCooldown > 0 || loginTwoStepResending}
+                    onClick={handleResendLoginTwoStep}
+                    className="font-semibold text-[#FF9E44] hover:text-[#FF7A00] disabled:text-zinc-500 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {loginTwoStepResending
+                      ? 'Resending...'
+                      : loginTwoStepCooldown > 0
+                      ? `Resend in ${loginTwoStepCooldown}s`
+                      : 'Resend 6-Digit Code'}
+                  </button>
+                </div>
+              ) : loginCanSwitchToEmail ? (
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <span className="text-zinc-400">Don&apos;t have your phone handy?</span>
+                  <button
+                    type="button"
+                    disabled={loginTwoStepResending}
+                    onClick={handleResendLoginTwoStep}
+                    className="font-semibold text-[#FF9E44] hover:text-[#FF7A00] disabled:text-zinc-500 cursor-pointer"
+                  >
+                    {loginTwoStepResending ? 'Sending Email Code...' : 'Use Email 6-Digit Code Instead'}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[11px] text-zinc-400 text-center pt-1">
+                  Open the Google Authenticator app on your phone for your fresh 6-digit code.
+                </p>
+              )}
             </form>
           )}
 
           {/* ======================================================== */}
-          {/* TAB 2: REGISTER FORM (2-STEP GMAIL OTP VERIFICATION) */}
+          {/* TAB 2: REGISTER FORM (2-STEP GMAIL OTP + GOOGLE SIGN-UP) */}
           {/* ======================================================== */}
           {tab === 'register' && regStep === 'form' && (
             <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
+              {/* Quick One-Click Google Account Creation */}
+              <button
+                type="button"
+                disabled={googleLoading || regLoading}
+                onClick={handleContinueWithGoogle}
+                className="w-full bg-white hover:bg-slate-100 text-[#0B1530] font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2.5 transition-all shadow-sm border border-white/20 disabled:opacity-60 cursor-pointer text-sm"
+              >
+                {googleLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-[#0B1530]/30 border-t-[#0B1530] rounded-full animate-spin" />
+                    <span>Connecting to Google...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.79-.07-1.54-.19-2.27h-11.3v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z" />
+                      <path fill="#34A853" d="M12.255 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96h-3.98v3.09C3.515 21.3 7.565 24 12.255 24z" />
+                      <path fill="#FBBC05" d="M5.525 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62h-3.98a11.86 11.86 0 0 0 0 10.76l3.98-3.09z" />
+                      <path fill="#EA4335" d="M12.255 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C18.205 1.19 15.495 0 12.255 0c-4.69 0-8.74 2.7-10.71 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z" />
+                    </svg>
+                    <span>Continue with Google (Instant Account)</span>
+                  </>
+                )}
+              </button>
+
+              <div className="relative py-1">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-white/10" />
+                </div>
+                <div className="relative flex justify-center text-[11px] uppercase tracking-wider">
+                  <span className="bg-[#091830] px-3 text-slate-400 font-semibold">or register with email</span>
+                </div>
+              </div>
               {regError && (
                 <div className="p-3 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 text-xs flex items-start gap-2.5">
                   <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />

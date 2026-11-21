@@ -34,6 +34,7 @@ import { AdminHubView } from './components/AdminHubView';
 import { DelhiveryAreaModal } from './components/DelhiveryPincodeChecker';
 import { OrderActionView } from './components/OrderActionView';
 import { activateRecoveryCoupon } from './services/aisensyService';
+import { sendRegistrationEmails } from './services/emailService';
 import { supabase } from './lib/supabase';
 
 // Legal & Policy Views
@@ -239,17 +240,52 @@ export default function App() {
     }
   }, [wishlistIds]);
 
-  // Handle Supabase email confirmation / auth redirect hash (#access_token=...) cleanly
+  // Handle Supabase email confirmation & Google OAuth redirects (#access_token=... or ?code=...) cleanly
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const hash = window.location.hash || '';
-    if (!hash.includes('access_token=') && !hash.includes('type=signup') && !hash.includes('type=recovery')) {
+    const searchParams = new URLSearchParams(window.location.search || '');
+    const oauthCode = searchParams.get('code');
+    const hasAuthHash =
+      hash.includes('access_token=') ||
+      hash.includes('type=signup') ||
+      hash.includes('type=recovery');
+
+    if (!hasAuthHash && !oauthCode) {
       return;
     }
 
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
+    // Defensive popup guard: if an iframe popup ever landed on root instead of /auth/google-callback,
+    // relay tokens back to the same-origin opener and close the popup immediately.
+    if (window.name === 'teqqno_google_oauth' && window.opener && !window.opener.closed) {
+      try {
+        const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+        window.opener.postMessage(
+          {
+            type: 'TEQQNO_GOOGLE_AUTH',
+            access_token: hashParams.get('access_token') || '',
+            refresh_token: hashParams.get('refresh_token') || '',
+            code: oauthCode || '',
+            error:
+              searchParams.get('error_description') ||
+              hashParams.get('error_description') ||
+              '',
+          },
+          window.location.origin
+        );
+        window.close();
+        return;
+      } catch {
+        // Different origin fallback — proceed normally
+      }
+    }
+
+    const resolveSession = async () => {
+      try {
+        if (oauthCode) {
+          await supabase.auth.exchangeCodeForSession(oauthCode);
+        }
+        const { data } = await supabase.auth.getSession();
         const authUser = data?.session?.user;
         if (!authUser) return;
 
@@ -262,10 +298,13 @@ export default function App() {
           cached = null;
         }
 
-        const resolvedCompany = cached?.companyName ?? (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
+        const resolvedCompany =
+          cached?.companyName ??
+          (meta.company && meta.company !== 'Direct B2B Client' ? meta.company : '');
         const fullName =
           cached?.name ||
           meta.full_name ||
+          meta.name ||
           `${meta.first_name || ''} ${meta.last_name || ''}`.trim() ||
           (authUser.email ? authUser.email.split('@')[0] : 'Customer');
 
@@ -276,25 +315,54 @@ export default function App() {
           mobile: cached?.mobile || meta.phone || '',
           companyName: resolvedCompany || undefined,
           gstin: cached?.gstin,
-          avatarUrl: cached?.avatarUrl,
+          avatarUrl: cached?.avatarUrl || meta.avatar_url || meta.picture || undefined,
           accountType: cached?.accountType || (resolvedCompany ? 'business' : 'individual'),
           role: resolvedCompany ? 'Corporate Admin' : 'Individual Shopper',
           isVerified: true,
-          createdAt: cached?.createdAt || authUser.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          createdAt:
+            cached?.createdAt ||
+            authUser.created_at?.split('T')[0] ||
+            new Date().toISOString().split('T')[0],
           savedAddresses: Array.isArray(cached?.savedAddresses) ? cached.savedAddresses : [],
         };
+
+        // Send Welcome email once if this is a brand-new Google OAuth signup
+        const createdMs = authUser.created_at ? new Date(authUser.created_at).getTime() : 0;
+        const welcomeFlagKey = `teqqno_welcome_sent_${authUser.id}`;
+        const alreadySent = localStorage.getItem(welcomeFlagKey) === '1';
+        if (!alreadySent && createdMs > 0 && Date.now() - createdMs < 120 * 1000 && verifiedProfile.email) {
+          localStorage.setItem(welcomeFlagKey, '1');
+          const nameParts = fullName.trim().split(/\s+/);
+          sendRegistrationEmails({
+            userId: verifiedProfile.id,
+            firstName: nameParts[0] || fullName,
+            lastName: nameParts.slice(1).join(' ') || '',
+            fullName,
+            email: verifiedProfile.email,
+            phone: verifiedProfile.mobile || '',
+            accountType: verifiedProfile.accountType || 'individual',
+            registeredAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
 
         setUser(verifiedProfile);
         try {
           localStorage.setItem('teqqno_user', JSON.stringify(verifiedProfile));
-          localStorage.setItem(`teqqno_user_profile_${verifiedProfile.id}`, JSON.stringify(verifiedProfile));
-          window.history.replaceState(null, '', '#dashboard');
+          localStorage.setItem(
+            `teqqno_user_profile_${verifiedProfile.id}`,
+            JSON.stringify(verifiedProfile)
+          );
+          window.history.replaceState(null, '', '/#dashboard');
         } catch {
           // ignore
         }
         setCurrentTab('dashboard');
-      })
-      .catch(() => {});
+      } catch {
+        // ignore failed redirect parse
+      }
+    };
+
+    void resolveSession();
   }, []);
 
   // Scroll to top on tab change

@@ -57,6 +57,7 @@ import { DelhiveryTrackResponse, trackDelhiveryWaybill } from '../../services/pa
 import { generateOrderTaxInvoicePdf, generateTaxInvoicePdf } from '../../utils/pdfGenerator';
 import { WhatsAppIcon } from '../WhatsAppIcon';
 import { AssetPreviewThumb } from './CustomerVisuals';
+import { CustomerTwoStepCard } from './CustomerTwoStepCard';
 import {
   AccountSubSection,
   formatFileSize,
@@ -2249,7 +2250,7 @@ export const CustomerAccountSecurityView: React.FC<{
               { id: 'password', label: 'Change Password' },
               { id: 'notifications', label: 'Notifications' },
               { id: 'gst', label: 'GST & Billing' },
-              { id: 'security', label: 'Security' },
+              { id: 'security', label: 'Security & 2FA' },
             ] as { id: AccountSubSection; label: string }[]
           ).map((t) => (
             <button
@@ -2613,50 +2614,60 @@ export const CustomerAccountSecurityView: React.FC<{
         </div>
       )}
 
-      {/* Sub-Section: SECURITY */}
+      {/* Sub-Section: SECURITY & 2FA */}
       {subSection === 'security' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-4">
-          <h3 className="text-base font-bold text-[#0B1530] font-display">
-            Account Verification & Session Security
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
-              <div className="text-slate-500 font-medium">Verification Status</div>
-              <div className="font-bold text-[#0B1530] flex items-center gap-1.5">
-                {user.isVerified ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Verified Account</span>
-                  </>
-                ) : (
-                  <>
-                    <Clock className="w-4 h-4 text-amber-600" />
-                    <span>Pending Verification</span>
-                  </>
-                )}
+        <div className="space-y-5">
+          <CustomerTwoStepCard
+            hasSupabaseSession={hasSupabaseSession}
+            sessionEmail={sessionEmail}
+            fallbackEmail={user.email}
+            onOpenAuth={onOpenAuth}
+            onToast={onToast}
+          />
+
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-4">
+            <h3 className="text-base font-bold text-[#0B1530] font-display">
+              Account Verification &amp; Session Security
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                <div className="text-slate-500 font-medium">Verification Status</div>
+                <div className="font-bold text-[#0B1530] flex items-center gap-1.5">
+                  {user.isVerified ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Verified Account</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-4 h-4 text-amber-600" />
+                      <span>Pending Verification</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                <div className="text-slate-500 font-medium">Active Authentication</div>
+                <div className="font-bold text-[#0B1530]">
+                  {hasSupabaseSession ? `Signed in (${sessionEmail})` : 'Local Storefront Session'}
+                </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
-              <div className="text-slate-500 font-medium">Active Authentication</div>
-              <div className="font-bold text-[#0B1530]">
-                {hasSupabaseSession ? `Signed in (${sessionEmail})` : 'Local Storefront Session'}
-              </div>
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
+              <p className="text-xs text-slate-500">
+                Sign out from all active sessions across browsers and mobile devices.
+              </p>
+              <button
+                type="button"
+                onClick={handleGlobalSignOut}
+                className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer min-h-[44px]"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out All Sessions</span>
+              </button>
             </div>
-          </div>
-
-          <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
-            <p className="text-xs text-slate-500">
-              Sign out from all active sessions across browsers and mobile devices.
-            </p>
-            <button
-              type="button"
-              onClick={handleGlobalSignOut}
-              className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer min-h-[44px]"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Sign Out All Sessions</span>
-            </button>
           </div>
         </div>
       )}

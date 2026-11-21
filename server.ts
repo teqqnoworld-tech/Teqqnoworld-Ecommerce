@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import crypto from 'crypto';
+import QRCode from 'qrcode';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -2865,6 +2866,1451 @@ app.post('/api/admin/security/toggle-2fa', async (req: Request, res: Response) =
       message: err?.message || 'Failed to update 2-Step Verification.',
     });
   }
+});
+
+// ==============================================================================
+// 3A-5. CUSTOMER PROFILE TWO-STEP VERIFICATION (EMAIL OTP)
+// ==============================================================================
+
+const CUSTOMER_2FA_PREFS_PATH = path.join(os.tmpdir(), 'teqqno-customer-2fa-prefs.json');
+const CUSTOMER_2FA_OTP_PATH = path.join(os.tmpdir(), 'teqqno-customer-2fa-otp.json');
+const CUSTOMER_2FA_SECRET = (
+  process.env.CUSTOMER_2FA_SECRET ||
+  process.env.ADMIN_SESSION_SECRET ||
+  process.env.HOSTINGER_SMTP_PASSWORD ||
+  crypto.randomBytes(32).toString('hex')
+).trim();
+
+const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_IgO3t6DbnmDpanEfJMCwyw_bqnQytYb';
+
+interface CustomerTwoStepPref {
+  userId: string;
+  accountEmail: string;
+  enabled: boolean;
+  twoStepEmail: string;
+  updatedAt: string;
+  totpEnabled?: boolean;
+  totpSecretEnc?: string;
+  totpUpdatedAt?: string | null;
+}
+
+interface CustomerTwoStepOtpEntry {
+  otpHash: string;
+  targetEmail: string;
+  action: 'enable' | 'disable' | 'change_email';
+  expiresAt: number;
+  lastSentAt: number;
+  attempts: number;
+}
+
+interface CustomerPendingTotpSetup {
+  secretBase32: string;
+  accountEmail: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+interface CustomerLoginChallenge {
+  challengeId: string;
+  userId: string;
+  accountEmail: string;
+  twoStepEmail: string;
+  customerName: string;
+  activeMethod: 'totp' | 'email';
+  emailEnabled: boolean;
+  totpEnabled: boolean;
+  totpSecretEnc: string;
+  otpHash: string;
+  accessToken: string;
+  refreshToken: string;
+  userPayload: any;
+  expiresAt: number;
+  lastSentAt: number;
+  attempts: number;
+}
+
+const customerLoginChallenges = new Map<string, CustomerLoginChallenge>();
+const customerPendingTotpSetups = new Map<string, CustomerPendingTotpSetup>();
+const customerTotpLastStep = new Map<string, number>();
+
+// RFC 4648 Base32 & RFC 6238 TOTP (Google Authenticator / Microsoft Authenticator / Authy)
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Encode(buf: Buffer): string {
+  let bits = 0;
+  let value = 0;
+  let output = '';
+  for (let i = 0; i < buf.length; i += 1) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return output;
+}
+
+function base32Decode(input: string): Buffer {
+  const cleaned = String(input || '')
+    .toUpperCase()
+    .replace(/=+$/g, '')
+    .replace(/[^A-Z2-7]/g, '');
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const idx = BASE32_ALPHABET.indexOf(cleaned[i]);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTotpSecretBase32(): string {
+  return base32Encode(crypto.randomBytes(20));
+}
+
+function formatManualTotpKey(secret: string): string {
+  return secret.replace(/(.{4})/g, '$1 ').trim();
+}
+
+function computeTotpAtStep(secretBase32: string, step: number): string {
+  const key = base32Decode(secretBase32);
+  const counterBuf = Buffer.alloc(8);
+  const high = Math.floor(step / 0x100000000);
+  const low = step >>> 0;
+  counterBuf.writeUInt32BE(high, 0);
+  counterBuf.writeUInt32BE(low, 4);
+  const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return String(binary % 1000000).padStart(6, '0');
+}
+
+function verifyTotpToken(
+  secretBase32: string,
+  code: string,
+  lastUsedStep?: number | null
+): { valid: boolean; matchedStep: number | null; replayed?: boolean } {
+  const cleanCode = String(code || '').replace(/[^0-9]/g, '').trim();
+  if (cleanCode.length !== 6 || !secretBase32) {
+    return { valid: false, matchedStep: null };
+  }
+  const currentStep = Math.floor(Date.now() / 1000 / 30);
+  const providedBuf = Buffer.from(cleanCode, 'utf8');
+  for (const offset of [-1, 0, 1]) {
+    const step = currentStep + offset;
+    const expected = computeTotpAtStep(secretBase32, step);
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    if (
+      providedBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(providedBuf, expectedBuf)
+    ) {
+      if (typeof lastUsedStep === 'number' && step <= lastUsedStep) {
+        return { valid: false, matchedStep: step, replayed: true };
+      }
+      return { valid: true, matchedStep: step };
+    }
+  }
+  return { valid: false, matchedStep: null };
+}
+
+function getTotpEncryptionKey(): Buffer {
+  return crypto.createHash('sha256').update(`totp_aes_key:${CUSTOMER_2FA_SECRET}`).digest();
+}
+
+function encryptTotpSecret(secretBase32: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getTotpEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(secretBase32, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
+}
+
+function decryptTotpSecret(payload: string): string | null {
+  try {
+    const parts = String(payload || '').split('.');
+    if (parts.length !== 3) return null;
+    const [ivStr, tagStr, dataStr] = parts;
+    const iv = Buffer.from(ivStr, 'base64url');
+    const tag = Buffer.from(tagStr, 'base64url');
+    const data = Buffer.from(dataStr, 'base64url');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getTotpEncryptionKey(), iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+    return decrypted.toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+function getSupabasePublicConfig() {
+  const { url } = getSupabaseAdminConfig();
+  const rawAnon = (
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    DEFAULT_SUPABASE_PUBLISHABLE_KEY
+  ).trim();
+  const anonKey =
+    rawAnon && !rawAnon.includes('your-anon') ? rawAnon : DEFAULT_SUPABASE_PUBLISHABLE_KEY;
+  return { url, anonKey };
+}
+
+function hashCustomerTwoStepOtp(scope: string, otp: string): string {
+  return crypto
+    .createHmac('sha256', CUSTOMER_2FA_SECRET)
+    .update(`cust_2fa:${scope}:${otp.trim()}`)
+    .digest('hex');
+}
+
+function signCustomerChallengeToken(challengeId: string, expiresAt: number): string {
+  const payload = Buffer.from(JSON.stringify({ cid: challengeId, exp: expiresAt })).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', CUSTOMER_2FA_SECRET)
+    .update(`cust_chal:${payload}`)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyCustomerChallengeToken(token: string): string | null {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 2) return null;
+    const [payload, sig] = parts;
+    const expected = crypto
+      .createHmac('sha256', CUSTOMER_2FA_SECRET)
+      .update(`cust_chal:${payload}`)
+      .digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!decoded?.cid || !decoded?.exp || Date.now() > Number(decoded.exp)) return null;
+    return String(decoded.cid);
+  } catch {
+    return null;
+  }
+}
+
+function loadCustomerTwoStepPrefs(): Record<string, CustomerTwoStepPref> {
+  try {
+    if (fs.existsSync(CUSTOMER_2FA_PREFS_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(CUSTOMER_2FA_PREFS_PATH, 'utf8'));
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {
+    // ignore corrupt mirror file
+  }
+  return {};
+}
+
+function saveCustomerTwoStepPrefs(store: Record<string, CustomerTwoStepPref>) {
+  try {
+    fs.writeFileSync(CUSTOMER_2FA_PREFS_PATH, JSON.stringify(store, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Customer 2FA Prefs Write Warning]:', err);
+  }
+}
+
+function loadCustomerTwoStepOtpStore(): Record<string, CustomerTwoStepOtpEntry> {
+  try {
+    if (fs.existsSync(CUSTOMER_2FA_OTP_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(CUSTOMER_2FA_OTP_PATH, 'utf8'));
+      const now = Date.now();
+      const cleaned: Record<string, CustomerTwoStepOtpEntry> = {};
+      for (const [k, v] of Object.entries(parsed || {})) {
+        const entry = v as CustomerTwoStepOtpEntry;
+        if (entry && entry.expiresAt > now) cleaned[k] = entry;
+      }
+      return cleaned;
+    }
+  } catch {
+    // ignore corrupt otp file
+  }
+  return {};
+}
+
+function saveCustomerTwoStepOtpStore(store: Record<string, CustomerTwoStepOtpEntry>) {
+  try {
+    fs.writeFileSync(CUSTOMER_2FA_OTP_PATH, JSON.stringify(store), 'utf8');
+  } catch (err) {
+    console.warn('[Customer 2FA OTP Store Write Warning]:', err);
+  }
+}
+
+function pruneExpiredCustomerChallenges() {
+  const now = Date.now();
+  for (const [cid, entry] of customerLoginChallenges.entries()) {
+    if (entry.expiresAt <= now) {
+      customerLoginChallenges.delete(cid);
+    }
+  }
+}
+
+function resolveCustomerTwoStepConfig(userObj: any): {
+  enabled: boolean;
+  twoStepEmail: string;
+  updatedAt: string | null;
+  totpEnabled: boolean;
+  totpSecretEnc: string;
+  totpUpdatedAt: string | null;
+} {
+  const userId = String(userObj?.id || '');
+  const accountEmail = String(userObj?.email || '').trim().toLowerCase();
+  const meta = userObj?.user_metadata || {};
+  const mirror = loadCustomerTwoStepPrefs()[userId];
+
+  const emailEnabled =
+    typeof meta.two_step_enabled === 'boolean'
+      ? meta.two_step_enabled
+      : Boolean(mirror?.enabled);
+  const twoStepEmail = String(
+    meta.two_step_email || mirror?.twoStepEmail || accountEmail
+  )
+    .trim()
+    .toLowerCase();
+  const updatedAt = meta.two_step_updated_at
+    ? String(meta.two_step_updated_at)
+    : mirror?.updatedAt || null;
+
+  const totpSecretEnc = String(meta.totp_secret_enc || mirror?.totpSecretEnc || '').trim();
+  const rawTotpEnabled =
+    typeof meta.totp_enabled === 'boolean'
+      ? meta.totp_enabled
+      : Boolean(mirror?.totpEnabled);
+  const totpEnabled = Boolean(rawTotpEnabled && totpSecretEnc);
+  const totpUpdatedAt = meta.totp_updated_at
+    ? String(meta.totp_updated_at)
+    : mirror?.totpUpdatedAt || null;
+
+  return {
+    enabled: emailEnabled,
+    twoStepEmail: twoStepEmail || accountEmail,
+    updatedAt,
+    totpEnabled,
+    totpSecretEnc,
+    totpUpdatedAt,
+  };
+}
+
+async function authenticateCustomerBearerToken(
+  req: Request
+): Promise<{ user: any; accessToken: string } | null> {
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
+  const accessToken = authHeader.slice(7).trim();
+  if (!accessToken || accessToken.length < 20) return null;
+
+  const { url, anonKey } = getSupabasePublicConfig();
+  try {
+    const resp = await fetch(`${url}/auth/v1/user`, {
+      method: 'GET',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (!resp.ok) return null;
+    const user = (await resp.json()) as any;
+    if (!user?.id || !user?.email) return null;
+    return { user, accessToken };
+  } catch {
+    return null;
+  }
+}
+
+async function sendCustomerTwoStepSecurityEmail(params: {
+  toEmail: string;
+  customerName?: string;
+  subject: string;
+  badge: string;
+  heading: string;
+  bodyText: string;
+  otpCode?: string;
+  note?: string;
+}): Promise<{ sent: boolean; simulated: boolean }> {
+  const cfg = getSmtpConfig();
+  const transporter = getSmtpTransporter();
+  if (!transporter) {
+    console.log('[Customer 2FA Email - Simulation Mode]', {
+      to: params.toEmail,
+      subject: params.subject,
+      otpCode: params.otpCode,
+    });
+    return { sent: true, simulated: true };
+  }
+
+  const spacedOtp = params.otpCode
+    ? `${params.otpCode.slice(0, 3)} ${params.otpCode.slice(3)}`
+    : '';
+  const timeIst = new Date().toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const safeGreeting = params.customerName ? `Hi ${params.customerName}, ` : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0F172A;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F4F6F9;padding:28px 14px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="540" cellspacing="0" cellpadding="0" style="max-width:540px;width:100%;background-color:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E2E8F0;">
+          <tr>
+            <td style="background-color:#071B35;padding:20px 28px;border-bottom:3px solid #FF7900;">
+              <div style="font-size:21px;font-weight:800;color:#FFFFFF;">
+                Teqqno<span style="color:#FF7900;">World</span>
+              </div>
+              <div style="font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:#CBD5E1;margin-top:3px;">
+                ${escapeHtml(params.badge)}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;text-align:center;">
+              <h1 style="margin:0 0 10px 0;font-size:20px;color:#0F172A;">
+                ${escapeHtml(params.heading)}
+              </h1>
+              <p style="margin:0 0 18px 0;font-size:14px;line-height:1.6;color:#334155;">
+                ${escapeHtml(safeGreeting + params.bodyText)}
+              </p>
+              ${
+                spacedOtp
+                  ? `<div style="display:inline-block;background-color:#FFF7ED;border:2px solid #FF7900;border-radius:12px;padding:16px 32px;margin:4px 0 20px;">
+                <div style="font-family:'Courier New',Courier,monospace;font-size:32px;font-weight:800;letter-spacing:8px;color:#C2410C;">
+                  ${escapeHtml(spacedOtp)}
+                </div>
+              </div>`
+                  : ''
+              }
+              <p style="margin:0;font-size:12px;color:#64748B;">
+                ${escapeHtml(
+                  params.note ||
+                    `This code expires in 10 minutes (${timeIst} IST). If you did not request this, please change your TeqqnoWorld account password immediately.`
+                )}
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#F8FAFC;padding:14px 28px;border-top:1px solid #E2E8F0;text-align:center;font-size:11px;color:#64748B;">
+              &copy; ${new Date().getFullYear()} TeqqnoWorld Account Security &bull; Hyderabad, India
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    params.heading,
+    '',
+    safeGreeting + params.bodyText,
+    params.otpCode ? `\nVerification Code: ${params.otpCode}\n` : '',
+    params.note || `Expires in 10 minutes (${timeIst} IST).`,
+  ].join('\n');
+
+  await transporter.sendMail({
+    from: `"TeqqnoWorld" <${cfg.smtpUser}>`,
+    to: params.toEmail,
+    replyTo: cfg.smtpUser,
+    subject: params.subject,
+    text,
+    html,
+  });
+
+  return { sent: true, simulated: false };
+}
+
+// 1. Get authenticated customer's Two-Step Verification status
+app.get('/api/customer/2fa/status', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Please sign in to manage Two-Step Verification.',
+      });
+    }
+
+    const cfg = getSmtpConfig();
+    const resolved = resolveCustomerTwoStepConfig(auth.user);
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+
+    return res.status(200).json({
+      success: true,
+      enabled: resolved.enabled,
+      twoStepEmail: resolved.twoStepEmail || accountEmail,
+      maskedEmail: maskEmailForPublic(resolved.twoStepEmail || accountEmail),
+      totpEnabled: resolved.totpEnabled,
+      totpUpdatedAt: resolved.totpUpdatedAt,
+      anyTwoStepEnabled: Boolean(resolved.enabled || resolved.totpEnabled),
+      accountEmail,
+      updatedAt: resolved.updatedAt,
+      smtpConfigured: Boolean(cfg.smtpUser && cfg.smtpPass),
+    });
+  } catch (err: any) {
+    console.error('[Customer 2FA Status Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to load Two-Step Verification status.',
+    });
+  }
+});
+
+// 2. Send 6-digit Email OTP to enable, change email, or turn OFF Customer 2-Step Verification
+app.post('/api/customer/2fa/send-setup-otp', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Session expired. Please sign in again.',
+      });
+    }
+
+    const rawAction = String(req.body?.action || 'enable').trim();
+    const action: 'enable' | 'disable' | 'change_email' =
+      rawAction === 'disable' || rawAction === 'change_email' ? rawAction : 'enable';
+
+    const resolved = resolveCustomerTwoStepConfig(auth.user);
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+    const requestedEmail = String(req.body?.email || '').trim().toLowerCase();
+
+    // When disabling, always send verification code to the currently protected 2FA email
+    const targetEmail =
+      action === 'disable'
+        ? resolved.twoStepEmail || accountEmail
+        : requestedEmail || resolved.twoStepEmail || accountEmail;
+
+    if (!targetEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address for Two-Step Verification.',
+      });
+    }
+
+    const otpKey = `${auth.user.id}:${action}`;
+    const otpStore = loadCustomerTwoStepOtpStore();
+    const existing = otpStore[otpKey];
+    const now = Date.now();
+    if (existing && now - existing.lastSentAt < 30 * 1000) {
+      const retryAfterSec = Math.ceil((30 * 1000 - (now - existing.lastSentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec,
+        message: `Please wait ${retryAfterSec}s before requesting another verification code.`,
+      });
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 1000000));
+    otpStore[otpKey] = {
+      otpHash: hashCustomerTwoStepOtp(`${auth.user.id}:${action}:${targetEmail}`, otpCode),
+      targetEmail,
+      action,
+      expiresAt: now + 10 * 60 * 1000,
+      lastSentAt: now,
+      attempts: 0,
+    };
+    saveCustomerTwoStepOtpStore(otpStore);
+
+    const meta = auth.user.user_metadata || {};
+    const customerName =
+      meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || undefined;
+
+    const mailCopy =
+      action === 'disable'
+        ? {
+            subject: `${otpCode} is your TeqqnoWorld code to disable 2-Step Verification`,
+            heading: 'Confirm Turning OFF 2-Step Verification',
+            bodyText:
+              'enter this 6-digit code in your TeqqnoWorld Security settings to confirm disabling Email Two-Step Verification.',
+          }
+        : action === 'change_email'
+        ? {
+            subject: `${otpCode} is your TeqqnoWorld 2-Step Email verification code`,
+            heading: 'Verify Your New 2-Step Email',
+            bodyText:
+              'enter this 6-digit code to verify this email address for your TeqqnoWorld Two-Step Verification logins.',
+          }
+        : {
+            subject: `${otpCode} is your TeqqnoWorld 2-Step Verification setup code`,
+            heading: 'Activate Two-Step Verification',
+            bodyText:
+              'enter this 6-digit code in your TeqqnoWorld profile to activate Two-Step Email Verification for future logins.',
+          };
+
+    const mailRes = await sendCustomerTwoStepSecurityEmail({
+      toEmail: targetEmail,
+      customerName,
+      subject: mailCopy.subject,
+      badge: 'Account Security',
+      heading: mailCopy.heading,
+      bodyText: mailCopy.bodyText,
+      otpCode,
+    });
+
+    return res.status(200).json({
+      success: true,
+      targetEmail,
+      maskedEmail: maskEmailForPublic(targetEmail),
+      simulated: mailRes.simulated,
+      devOtp: mailRes.simulated ? otpCode : undefined,
+      message: mailRes.simulated
+        ? `Simulation Mode: Use verification code ${otpCode}.`
+        : `6-digit verification code sent to ${targetEmail}.`,
+    });
+  } catch (err: any) {
+    console.error('[Customer 2FA Send Setup OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Could not send verification code. Please try again.',
+    });
+  }
+});
+
+// 3. Verify 6-digit Email OTP & persist Customer 2-Step Verification ON/OFF
+app.post('/api/customer/2fa/toggle', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Session expired. Please sign in again.',
+      });
+    }
+
+    const enabled = Boolean(req.body?.enabled);
+    const rawAction = String(req.body?.action || (enabled ? 'enable' : 'disable')).trim();
+    const action: 'enable' | 'disable' | 'change_email' =
+      rawAction === 'disable' || rawAction === 'change_email' ? rawAction : 'enable';
+    const cleanOtp = String(req.body?.otp || '').replace(/[^0-9]/g, '').trim();
+
+    if (cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter the complete 6-digit verification code sent to your email.',
+      });
+    }
+
+    const otpKey = `${auth.user.id}:${action}`;
+    const otpStore = loadCustomerTwoStepOtpStore();
+    const entry = otpStore[otpKey];
+    if (!entry) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code expired or not requested. Please request a new code.',
+      });
+    }
+    if (Date.now() > entry.expiresAt) {
+      delete otpStore[otpKey];
+      saveCustomerTwoStepOtpStore(otpStore);
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new 6-digit code.',
+      });
+    }
+    if (entry.attempts >= 5) {
+      delete otpStore[otpKey];
+      saveCustomerTwoStepOtpStore(otpStore);
+      return res.status(429).json({
+        success: false,
+        message: 'Too many wrong attempts. Please request a fresh verification code.',
+      });
+    }
+
+    const providedHash = hashCustomerTwoStepOtp(
+      `${auth.user.id}:${action}:${entry.targetEmail}`,
+      cleanOtp
+    );
+    const a = Buffer.from(providedHash, 'hex');
+    const b = Buffer.from(entry.otpHash, 'hex');
+    const isMatch = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!isMatch) {
+      entry.attempts += 1;
+      otpStore[otpKey] = entry;
+      saveCustomerTwoStepOtpStore(otpStore);
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect 6-digit verification code (${5 - entry.attempts} attempts left).`,
+      });
+    }
+
+    // Consume single-use OTP
+    delete otpStore[otpKey];
+    saveCustomerTwoStepOtpStore(otpStore);
+
+    const updatedAt = new Date().toISOString();
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+    const finalTwoStepEmail = entry.targetEmail || accountEmail;
+
+    // Persist in Supabase Auth user_metadata using the customer's verified session token
+    const { url, anonKey } = getSupabasePublicConfig();
+    const updateResp = await fetch(`${url}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${auth.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        data: {
+          two_step_enabled: enabled,
+          two_step_email: finalTwoStepEmail,
+          two_step_updated_at: updatedAt,
+        },
+      }),
+    });
+
+    if (!updateResp.ok) {
+      const errText = await updateResp.text().catch(() => '');
+      console.warn('[Customer 2FA Metadata Update Warning]:', updateResp.status, errText.slice(0, 180));
+    }
+
+    // Also mirror on server filesystem for instant consistency (preserving any active TOTP config)
+    const prefsStore = loadCustomerTwoStepPrefs();
+    const existingMirror = prefsStore[auth.user.id];
+    prefsStore[auth.user.id] = {
+      ...(existingMirror || {}),
+      userId: auth.user.id,
+      accountEmail,
+      enabled,
+      twoStepEmail: finalTwoStepEmail,
+      updatedAt,
+    };
+    saveCustomerTwoStepPrefs(prefsStore);
+
+    // Send confirmation notice to the verified email (non-blocking)
+    const meta = auth.user.user_metadata || {};
+    const customerName =
+      meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || undefined;
+
+    sendCustomerTwoStepSecurityEmail({
+      toEmail: finalTwoStepEmail,
+      customerName,
+      subject: enabled
+        ? 'Two-Step Verification is now active on your TeqqnoWorld account'
+        : 'Two-Step Verification turned OFF on your TeqqnoWorld account',
+      badge: 'Account Security Confirmation',
+      heading: enabled ? 'Two-Step Verification Activated' : 'Two-Step Verification Disabled',
+      bodyText: enabled
+        ? `Two-Step Email Verification is now ON for your TeqqnoWorld account (${accountEmail}). Future logins will require a 6-digit code sent to ${finalTwoStepEmail}.`
+        : `Two-Step Email Verification has been turned OFF for your TeqqnoWorld account (${accountEmail}). You can re-enable it anytime from Account & Security.`,
+      note: 'If you did not make this change, reset your password immediately.',
+    }).catch((e) => console.warn('[Customer 2FA Confirmation Email Warning]:', e));
+
+    return res.status(200).json({
+      success: true,
+      enabled,
+      twoStepEmail: finalTwoStepEmail,
+      maskedEmail: maskEmailForPublic(finalTwoStepEmail),
+      updatedAt,
+      message: enabled
+        ? `Two-Step Verification is now ACTIVE! Login codes will be sent to ${finalTwoStepEmail}.`
+        : 'Two-Step Verification has been turned OFF.',
+    });
+  } catch (err: any) {
+    console.error('[Customer 2FA Toggle Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to update Two-Step Verification settings.',
+    });
+  }
+});
+
+// 4. Server-Gated Customer Login Step 1 (Password check -> returns session ONLY if 2FA is OFF; else triggers 6-digit Email OTP)
+app.post('/api/customer/2fa/login-step1', async (req: Request, res: Response) => {
+  try {
+    pruneExpiredCustomerChallenges();
+    const cleanEmail = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address.',
+      });
+    }
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter your password.',
+      });
+    }
+
+    const { url, anonKey } = getSupabasePublicConfig();
+    const authResp = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: {
+        apikey: anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: cleanEmail,
+        password,
+      }),
+    });
+
+    const authJson = (await authResp.json().catch(() => ({}))) as any;
+
+    if (!authResp.ok || !authJson?.access_token || !authJson?.user) {
+      const rawErr = String(
+        authJson?.error_description || authJson?.msg || authJson?.message || ''
+      );
+      if (rawErr.toLowerCase().includes('invalid login credentials')) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid email or password. Please verify and try again.',
+        });
+      }
+      if (rawErr.toLowerCase().includes('email not confirmed')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Please check your email inbox to confirm your account first.',
+        });
+      }
+      return res.status(authResp.status >= 400 ? authResp.status : 401).json({
+        success: false,
+        message: rawErr || 'Invalid email or password. Please try again.',
+      });
+    }
+
+    const userObj = authJson.user;
+    const resolved = resolveCustomerTwoStepConfig(userObj);
+
+    // If customer has NEITHER Google Authenticator NOR Email OTP enabled -> log them in directly
+    if (!resolved.totpEnabled && !resolved.enabled) {
+      return res.status(200).json({
+        success: true,
+        requiresTwoStep: false,
+        session: {
+          access_token: authJson.access_token,
+          refresh_token: authJson.refresh_token,
+        },
+        user: userObj,
+      });
+    }
+
+    // Two-Step Verification IS ENABLED -> Hold session tokens strictly on server until 6-digit verification passes
+    const targetEmail = resolved.twoStepEmail || cleanEmail;
+    const challengeId = crypto.randomBytes(24).toString('hex');
+    const now = Date.now();
+    const expiresAt = now + 10 * 60 * 1000;
+    const meta = userObj.user_metadata || {};
+    const customerName =
+      meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || '';
+
+    // Prefer Google Authenticator (instant, offline) when active; otherwise send 6-digit Email OTP
+    if (resolved.totpEnabled) {
+      customerLoginChallenges.set(challengeId, {
+        challengeId,
+        userId: String(userObj.id),
+        accountEmail: cleanEmail,
+        twoStepEmail: targetEmail,
+        customerName,
+        activeMethod: 'totp',
+        emailEnabled: resolved.enabled,
+        totpEnabled: true,
+        totpSecretEnc: resolved.totpSecretEnc,
+        otpHash: '',
+        accessToken: String(authJson.access_token),
+        refreshToken: String(authJson.refresh_token),
+        userPayload: userObj,
+        expiresAt,
+        lastSentAt: 0,
+        attempts: 0,
+      });
+
+      const challengeToken = signCustomerChallengeToken(challengeId, expiresAt);
+      return res.status(200).json({
+        success: true,
+        requiresTwoStep: true,
+        method: 'totp',
+        canSwitchToEmail: resolved.enabled,
+        challengeToken,
+        maskedEmail: maskEmailForPublic(targetEmail),
+        message: 'Password verified! Open Google Authenticator and enter the 6-digit code for TeqqnoWorld.',
+      });
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 1000000));
+    customerLoginChallenges.set(challengeId, {
+      challengeId,
+      userId: String(userObj.id),
+      accountEmail: cleanEmail,
+      twoStepEmail: targetEmail,
+      customerName,
+      activeMethod: 'email',
+      emailEnabled: true,
+      totpEnabled: false,
+      totpSecretEnc: '',
+      otpHash: hashCustomerTwoStepOtp(`login:${challengeId}`, otpCode),
+      accessToken: String(authJson.access_token),
+      refreshToken: String(authJson.refresh_token),
+      userPayload: userObj,
+      expiresAt,
+      lastSentAt: now,
+      attempts: 0,
+    });
+
+    const mailRes = await sendCustomerTwoStepSecurityEmail({
+      toEmail: targetEmail,
+      customerName: customerName || undefined,
+      subject: `${otpCode} is your TeqqnoWorld login verification code`,
+      badge: '2-Step Login Verification',
+      heading: 'Verify Your Sign-In',
+      bodyText:
+        'someone entered your correct password on TeqqnoWorld. Enter this 6-digit verification code to complete your sign-in:',
+      otpCode,
+    });
+
+    const challengeToken = signCustomerChallengeToken(challengeId, expiresAt);
+
+    return res.status(200).json({
+      success: true,
+      requiresTwoStep: true,
+      method: 'email',
+      canSwitchToEmail: false,
+      challengeToken,
+      maskedEmail: maskEmailForPublic(targetEmail),
+      simulated: mailRes.simulated,
+      devOtp: mailRes.simulated ? otpCode : undefined,
+      message: mailRes.simulated
+        ? `Simulation Mode: Use 2-Step login code ${otpCode}.`
+        : `Password verified! Enter the 6-digit code sent to ${maskEmailForPublic(targetEmail)}.`,
+    });
+  } catch (err: any) {
+    console.error('[Customer Login Step 1 Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Sign-in failed. Please check your connection and try again.',
+    });
+  }
+});
+
+// 5. Server-Gated Customer Login Step 2 (Verify 6-digit TOTP Authenticator OR Email OTP -> Release Supabase session)
+app.post('/api/customer/2fa/login-verify-otp', (req: Request, res: Response) => {
+  try {
+    pruneExpiredCustomerChallenges();
+    const challengeToken = String(req.body?.challengeToken || '').trim();
+    const cleanOtp = String(req.body?.otp || '').replace(/[^0-9]/g, '').trim();
+
+    const challengeId = verifyCustomerChallengeToken(challengeToken);
+    if (!challengeId) {
+      return res.status(401).json({
+        success: false,
+        expired: true,
+        message: 'Login verification session expired. Please sign in again.',
+      });
+    }
+
+    const challenge = customerLoginChallenges.get(challengeId);
+    if (!challenge || Date.now() > challenge.expiresAt) {
+      customerLoginChallenges.delete(challengeId);
+      return res.status(401).json({
+        success: false,
+        expired: true,
+        message: 'Login verification code expired. Please sign in again.',
+      });
+    }
+
+    if (cleanOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        message:
+          challenge.activeMethod === 'totp'
+            ? 'Please enter the 6-digit code from your Google Authenticator app.'
+            : 'Please enter the complete 6-digit code sent to your email.',
+      });
+    }
+
+    if (challenge.attempts >= 5) {
+      customerLoginChallenges.delete(challengeId);
+      return res.status(429).json({
+        success: false,
+        expired: true,
+        message: 'Too many wrong attempts. Please sign in again from Step 1.',
+      });
+    }
+
+    let isMatch = false;
+    if (challenge.activeMethod === 'totp') {
+      const secretBase32 = decryptTotpSecret(challenge.totpSecretEnc);
+      if (!secretBase32) {
+        return res.status(500).json({
+          success: false,
+          message: 'Authenticator verification key unavailable. Please use Email verification or contact support.',
+        });
+      }
+      const lastStep = customerTotpLastStep.get(challenge.userId) ?? null;
+      const totpCheck = verifyTotpToken(secretBase32, cleanOtp, lastStep);
+      if (totpCheck.replayed) {
+        return res.status(400).json({
+          success: false,
+          message: 'That 6-digit code was already used. Please wait for the next 30-second code in Google Authenticator.',
+        });
+      }
+      isMatch = totpCheck.valid;
+      if (isMatch && totpCheck.matchedStep !== null) {
+        customerTotpLastStep.set(challenge.userId, totpCheck.matchedStep);
+      }
+    } else {
+      const providedHash = hashCustomerTwoStepOtp(`login:${challengeId}`, cleanOtp);
+      const a = Buffer.from(providedHash, 'hex');
+      const b = Buffer.from(challenge.otpHash, 'hex');
+      isMatch = a.length === b.length && crypto.timingSafeEqual(a, b);
+    }
+
+    if (!isMatch) {
+      challenge.attempts += 1;
+      customerLoginChallenges.set(challengeId, challenge);
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect 6-digit code (${5 - challenge.attempts} attempts left).`,
+      });
+    }
+
+    // Consume single-use challenge and release session tokens
+    customerLoginChallenges.delete(challengeId);
+
+    return res.status(200).json({
+      success: true,
+      session: {
+        access_token: challenge.accessToken,
+        refresh_token: challenge.refreshToken,
+      },
+      user: challenge.userPayload,
+    });
+  } catch (err: any) {
+    console.error('[Customer Login Verify OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to verify login code.',
+    });
+  }
+});
+
+// 6. Resend 6-digit 2-Step Login Email OTP (or switch from TOTP to Email OTP if both enabled)
+app.post('/api/customer/2fa/login-resend', async (req: Request, res: Response) => {
+  try {
+    pruneExpiredCustomerChallenges();
+    const challengeToken = String(req.body?.challengeToken || '').trim();
+    const challengeId = verifyCustomerChallengeToken(challengeToken);
+
+    if (!challengeId) {
+      return res.status(401).json({
+        success: false,
+        expired: true,
+        message: 'Login verification session expired. Please sign in again.',
+      });
+    }
+
+    const challenge = customerLoginChallenges.get(challengeId);
+    if (!challenge || Date.now() > challenge.expiresAt) {
+      customerLoginChallenges.delete(challengeId);
+      return res.status(401).json({
+        success: false,
+        expired: true,
+        message: 'Login verification session expired. Please sign in again.',
+      });
+    }
+
+    if (!challenge.emailEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email OTP fallback is not enabled on this account. Please enter the code from Google Authenticator.',
+      });
+    }
+
+    const now = Date.now();
+    if (challenge.lastSentAt > 0 && now - challenge.lastSentAt < 30 * 1000) {
+      const retryAfterSec = Math.ceil((30 * 1000 - (now - challenge.lastSentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        retryAfterSec,
+        message: `Please wait ${retryAfterSec}s before requesting a new code.`,
+      });
+    }
+
+    const otpCode = String(crypto.randomInt(100000, 1000000));
+    challenge.activeMethod = 'email';
+    challenge.otpHash = hashCustomerTwoStepOtp(`login:${challengeId}`, otpCode);
+    challenge.lastSentAt = now;
+    challenge.expiresAt = now + 10 * 60 * 1000;
+    challenge.attempts = 0;
+    customerLoginChallenges.set(challengeId, challenge);
+
+    const mailRes = await sendCustomerTwoStepSecurityEmail({
+      toEmail: challenge.twoStepEmail,
+      customerName: challenge.customerName || undefined,
+      subject: `${otpCode} is your TeqqnoWorld login verification code`,
+      badge: '2-Step Login Verification',
+      heading: 'Sign-In Verification Code',
+      bodyText: 'here is your 6-digit verification code to complete your TeqqnoWorld login:',
+      otpCode,
+    });
+
+    return res.status(200).json({
+      success: true,
+      method: 'email',
+      maskedEmail: maskEmailForPublic(challenge.twoStepEmail),
+      simulated: mailRes.simulated,
+      devOtp: mailRes.simulated ? otpCode : undefined,
+      message: mailRes.simulated
+        ? `Simulation Mode: Code is ${otpCode}.`
+        : `6-digit verification code sent to ${maskEmailForPublic(challenge.twoStepEmail)}.`,
+    });
+  } catch (err: any) {
+    console.error('[Customer Login Resend OTP Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Could not send verification code.',
+    });
+  }
+});
+
+// 7. Google Authenticator (TOTP) Step 1: Generate local QR Code + Manual Key (Zero Google APIs!)
+app.post('/api/customer/2fa/totp/setup', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Please sign in to set up Google Authenticator.',
+      });
+    }
+
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+    const secretBase32 = generateTotpSecretBase32();
+    const issuer = 'TeqqnoWorld';
+    const label = `${issuer}:${accountEmail}`;
+    const otpauthUrl = `otpauth://totp/${encodeURIComponent(label)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+
+    // Render QR locally on our server (secret never leaves our server to any third-party QR site)
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
+      width: 240,
+      margin: 2,
+      color: { dark: '#0B1530', light: '#FFFFFF' },
+    });
+
+    customerPendingTotpSetups.set(auth.user.id, {
+      secretBase32,
+      accountEmail,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      attempts: 0,
+    });
+
+    return res.status(200).json({
+      success: true,
+      qrDataUrl,
+      manualKey: formatManualTotpKey(secretBase32),
+      accountEmail,
+      issuer,
+      message: 'Scan this QR code in Google Authenticator, then enter the 6-digit code to activate.',
+    });
+  } catch (err: any) {
+    console.error('[Customer TOTP Setup Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to generate Google Authenticator QR code.',
+    });
+  }
+});
+
+// 8. Google Authenticator (TOTP) Step 2: Verify 6-digit App Code & Activate
+app.post('/api/customer/2fa/totp/confirm', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Session expired. Please sign in again.',
+      });
+    }
+
+    const cleanCode = String(req.body?.code || '').replace(/[^0-9]/g, '').trim();
+    if (cleanCode.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter the 6-digit code shown in your Google Authenticator app.',
+      });
+    }
+
+    const pending = customerPendingTotpSetups.get(auth.user.id);
+    if (!pending || Date.now() > pending.expiresAt) {
+      customerPendingTotpSetups.delete(auth.user.id);
+      return res.status(400).json({
+        success: false,
+        message: 'QR setup session expired. Please click Setup Google Authenticator again.',
+      });
+    }
+
+    if (pending.attempts >= 5) {
+      customerPendingTotpSetups.delete(auth.user.id);
+      return res.status(429).json({
+        success: false,
+        message: 'Too many incorrect codes. Please generate a fresh QR code.',
+      });
+    }
+
+    const check = verifyTotpToken(pending.secretBase32, cleanCode, null);
+    if (!check.valid) {
+      pending.attempts += 1;
+      customerPendingTotpSetups.set(auth.user.id, pending);
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect 6-digit Authenticator code (${5 - pending.attempts} attempts left). Make sure your phone time is set to Automatic.`,
+      });
+    }
+
+    customerPendingTotpSetups.delete(auth.user.id);
+    if (check.matchedStep !== null) {
+      customerTotpLastStep.set(auth.user.id, check.matchedStep);
+    }
+
+    const encryptedSecret = encryptTotpSecret(pending.secretBase32);
+    const totpUpdatedAt = new Date().toISOString();
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+
+    // Persist encrypted TOTP secret in Supabase Auth user_metadata
+    const { url, anonKey } = getSupabasePublicConfig();
+    const updateResp = await fetch(`${url}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${auth.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        data: {
+          totp_enabled: true,
+          totp_secret_enc: encryptedSecret,
+          totp_updated_at: totpUpdatedAt,
+        },
+      }),
+    });
+
+    if (!updateResp.ok) {
+      const errText = await updateResp.text().catch(() => '');
+      console.warn('[Customer TOTP Metadata Save Warning]:', updateResp.status, errText.slice(0, 180));
+    }
+
+    // Mirror on server filesystem
+    const prefsStore = loadCustomerTwoStepPrefs();
+    const existing = prefsStore[auth.user.id];
+    prefsStore[auth.user.id] = {
+      userId: auth.user.id,
+      accountEmail,
+      enabled: Boolean(existing?.enabled),
+      twoStepEmail: existing?.twoStepEmail || accountEmail,
+      updatedAt: existing?.updatedAt || totpUpdatedAt,
+      totpEnabled: true,
+      totpSecretEnc: encryptedSecret,
+      totpUpdatedAt,
+    };
+    saveCustomerTwoStepPrefs(prefsStore);
+
+    // Send confirmation notice to account email (non-blocking)
+    const meta = auth.user.user_metadata || {};
+    const customerName =
+      meta.full_name || `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || undefined;
+    sendCustomerTwoStepSecurityEmail({
+      toEmail: accountEmail,
+      customerName,
+      subject: 'Google Authenticator 2-Step Verification Activated — TeqqnoWorld',
+      badge: 'Account Security Confirmation',
+      heading: 'Google Authenticator Activated',
+      bodyText: `Google Authenticator (TOTP) is now active on your TeqqnoWorld account (${accountEmail}). Future logins will require a 6-digit code from your Authenticator app.`,
+      note: 'If you did not enable this, reset your password immediately.',
+    }).catch((e) => console.warn('[Customer TOTP Enable Mail Warning]:', e));
+
+    return res.status(200).json({
+      success: true,
+      totpEnabled: true,
+      totpUpdatedAt,
+      message: 'Google Authenticator is now ACTIVE! Your account is protected with app-based 2-Step Verification.',
+    });
+  } catch (err: any) {
+    console.error('[Customer TOTP Confirm Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to activate Google Authenticator.',
+    });
+  }
+});
+
+// 9. Google Authenticator (TOTP) Disable: Requires a valid live 6-digit Authenticator code
+app.post('/api/customer/2fa/totp/disable', async (req: Request, res: Response) => {
+  try {
+    const auth = await authenticateCustomerBearerToken(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        unauthorized: true,
+        message: 'Session expired. Please sign in again.',
+      });
+    }
+
+    const cleanCode = String(req.body?.code || '').replace(/[^0-9]/g, '').trim();
+    if (cleanCode.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter the current 6-digit code from your Google Authenticator app to turn it OFF.',
+      });
+    }
+
+    const resolved = resolveCustomerTwoStepConfig(auth.user);
+    if (!resolved.totpEnabled || !resolved.totpSecretEnc) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google Authenticator is already turned OFF.',
+      });
+    }
+
+    const secretBase32 = decryptTotpSecret(resolved.totpSecretEnc);
+    if (!secretBase32) {
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to verify Authenticator key. Please contact support.',
+      });
+    }
+
+    const check = verifyTotpToken(secretBase32, cleanCode, customerTotpLastStep.get(auth.user.id) ?? null);
+    if (!check.valid) {
+      return res.status(400).json({
+        success: false,
+        message: check.replayed
+          ? 'Code already used. Wait for the next 30-second code in Google Authenticator.'
+          : 'Incorrect 6-digit Google Authenticator code.',
+      });
+    }
+    if (check.matchedStep !== null) {
+      customerTotpLastStep.set(auth.user.id, check.matchedStep);
+    }
+
+    const totpUpdatedAt = new Date().toISOString();
+    const accountEmail = String(auth.user.email || '').trim().toLowerCase();
+
+    const { url, anonKey } = getSupabasePublicConfig();
+    await fetch(`${url}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${auth.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        data: {
+          totp_enabled: false,
+          totp_secret_enc: '',
+          totp_updated_at: totpUpdatedAt,
+        },
+      }),
+    }).catch(() => {});
+
+    const prefsStore = loadCustomerTwoStepPrefs();
+    const existing = prefsStore[auth.user.id];
+    prefsStore[auth.user.id] = {
+      userId: auth.user.id,
+      accountEmail,
+      enabled: Boolean(existing?.enabled),
+      twoStepEmail: existing?.twoStepEmail || accountEmail,
+      updatedAt: existing?.updatedAt || totpUpdatedAt,
+      totpEnabled: false,
+      totpSecretEnc: '',
+      totpUpdatedAt,
+    };
+    saveCustomerTwoStepPrefs(prefsStore);
+
+    return res.status(200).json({
+      success: true,
+      totpEnabled: false,
+      totpUpdatedAt,
+      message: 'Google Authenticator has been turned OFF for your account.',
+    });
+  } catch (err: any) {
+    console.error('[Customer TOTP Disable Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to turn OFF Google Authenticator.',
+    });
+  }
+});
+
+// 10. Iframe-Safe Google OAuth Popup Callback Bridge (supports both PKCE ?code= and Implicit #access_token=)
+app.get(['/auth/google-callback', '/auth/google-callback/'], (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Completing Google Sign-In — TeqqnoWorld</title>
+  <style>
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#071B35; color:#FFFFFF; display:flex; align-items:center; justify-content:center; min-height:100vh; text-align:center; padding:24px; }
+    .card { max-width:360px; background:#0D2445; border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:28px; }
+    .dot { width:36px; height:36px; border:3px solid rgba(255,121,0,0.3); border-top-color:#FF7900; border-radius:50%; margin:0 auto 14px; animation:spin 0.8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    p { font-size:13px; color:#CBD5E1; margin:8px 0 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="dot"></div>
+    <strong style="font-size:16px;">Completing Google Sign-In...</strong>
+    <p id="status">Returning securely to TeqqnoWorld.</p>
+  </div>
+  <script>
+    (function() {
+      var hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+      var queryParams = new URLSearchParams(window.location.search || '');
+      var payload = {
+        type: 'TEQQNO_GOOGLE_AUTH',
+        access_token: hashParams.get('access_token') || '',
+        refresh_token: hashParams.get('refresh_token') || '',
+        code: queryParams.get('code') || '',
+        error: queryParams.get('error_description') || hashParams.get('error_description') || queryParams.get('error') || hashParams.get('error') || ''
+      };
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage(payload, window.location.origin);
+          setTimeout(function() { window.close(); }, 200);
+          return;
+        } catch (e) {}
+      }
+      // Top-level browser fallback (when user opened outside iframe without popup)
+      var suffix = window.location.search + window.location.hash;
+      window.location.replace('/' + suffix);
+    })();
+  </script>
+</body>
+</html>`);
 });
 
 // ==============================================================================
